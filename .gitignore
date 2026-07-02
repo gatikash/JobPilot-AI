@@ -1,0 +1,12 @@
+# dependencies
+node_modules/
+
+# build output (users build locally with `npm run build`)
+dist/
+
+# local tooling / session files
+.claude/
+
+# OS junk
+Thumbs.db
+.DS_Store

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>FireApply Settings</title>
+  <link rel="stylesheet" href="../styles.css" />
+  <style>
+    body { max-width: 860px; margin: 0 auto; padding: 24px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+    .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 16px; }
+    #locked-overlay { text-align: center; padding: 60px 0; }
+  </style>
+</head>
+<body>
+  <h1>🔥 FireApply Settings</h1>
+
+  <div id="locked-overlay" class="hidden">
+    <p class="muted">Vault is locked or not set up. Use the extension popup to unlock, then reload this page.</p>
+  </div>
+
+  <div id="content" class="hidden">
+    <div class="tabs">
+      <button data-tab="profile" class="active">Profile</button>
+      <button data-tab="countries">Countries &amp; Visa</button>
+      <button data-tab="resumes">Resumes</button>
+      <button data-tab="answers">Saved Answers</button>
+      <button data-tab="history">History</button>
+      <button data-tab="backup">Backup &amp; Settings</button>
+    </div>
+
+    <!-- PROFILE -->
+    <section id="tab-profile">
+      <div class="card">
+        <h2>Personal</h2>
+        <div class="grid3">
+          <div><label>First name</label><input data-f="firstName" placeholder="e.g. John" /></div>
+          <div><label>Middle name</label><input data-f="middleName" placeholder="Leave blank if none" /></div>
+          <div><label>Last name</label><input data-f="lastName" placeholder="e.g. Smith" /></div>
+          <div><label>Email</label><input data-f="email" type="email" placeholder="you@example.com" /></div>
+          <div><label>Alternate email</label><input data-f="alternateEmail" type="email" placeholder="backup@example.com" /></div>
+          <div><label>Phone (with country code)</label><input data-f="phone" placeholder="+91 98765 43210" /></div>
+          <div><label>WhatsApp</label><input data-f="whatsapp" placeholder="+91 98765 43210" /></div>
+          <div><label>Date of birth</label><input data-f="dateOfBirth" type="date" /></div>
+          <div><label>Gender (optional)</label><input data-f="gender" placeholder="Optional" /></div>
+          <div><label>Nationality</label><input data-f="nationality" placeholder="e.g. Indian" /></div>
+          <div><label>Country of residence</label><input data-f="currentResidenceCountry" placeholder="e.g. India" /></div>
+        </div>
+        <h2>Address</h2>
+        <div class="grid3">
+          <div style="grid-column: span 3;"><label>Street address</label><input data-f="address" placeholder="Flat / street / area" /></div>
+          <div><label>City</label><input data-f="city" placeholder="e.g. Bengaluru" /></div>
+          <div><label>State / Province</label><input data-f="state" placeholder="e.g. Karnataka" /></div>
+          <div><label>Postal code</label><input data-f="postalCode" placeholder="e.g. 560001" /></div>
+          <div><label>Country</label><input data-f="country" placeholder="e.g. India" /></div>
+        </div>
+        <h2>Professional</h2>
+        <div class="grid2">
+          <div><label>Current job title</label><input data-f="currentTitle" placeholder="e.g. Senior .NET Developer" /></div>
+          <div><label>Current employer</label><input data-f="currentEmployer" placeholder="e.g. Acme Technologies" /></div>
+          <div><label>Total experience (years)</label><input data-f="totalExperience" placeholder="e.g. 7" /></div>
+          <div><label>Relevant experience (years)</label><input data-f="relevantExperience" placeholder="e.g. 5" /></div>
+          <div><label>Primary skills</label><input data-f="primarySkills" placeholder="C#, .NET, SQL Server, Azure" /></div>
+          <div><label>Secondary skills</label><input data-f="secondarySkills" placeholder="Docker, Kubernetes, React" /></div>
+          <div><label>Current salary (with currency)</label><input data-f="currentSalary" placeholder="e.g. 18 LPA INR" /></div>
+        </div>
+        <h2>Education</h2>
+        <div class="grid3">
+          <div><label>Highest degree</label><input data-f="highestDegree" placeholder="e.g. Bachelor's" /></div>
+          <div><label>Degree name</label><input data-f="degreeName" placeholder="e.g. B.Tech Computer Science" /></div>
+          <div><label>University / College</label><input data-f="university" placeholder="e.g. Delhi University" /></div>
+          <div><label>Field of study</label><input data-f="fieldOfStudy" placeholder="e.g. Computer Science" /></div>
+          <div><label>Graduation year</label><input data-f="graduationYear" placeholder="e.g. 2019" /></div>
+          <div><label>GPA / Percentage</label><input data-f="gpa" placeholder="e.g. 8.2 CGPA" /></div>
+        </div>
+        <h2>Links</h2>
+        <div class="grid2">
+          <div><label>LinkedIn URL</label><input data-f="linkedinUrl" placeholder="https://linkedin.com/in/username" /></div>
+          <div><label>GitHub URL</label><input data-f="githubUrl" placeholder="https://github.com/username" /></div>
+          <div><label>Portfolio URL</label><input data-f="portfolioUrl" placeholder="https://yourportfolio.dev" /></div>
+          <div><label>Personal website</label><input data-f="personalWebsite" placeholder="https://yoursite.com" /></div>
+        </div>
+        <h2>Default cover letter text</h2>
+        <textarea data-f="coverLetterText" rows="5" placeholder="Generic cover letter used when a form has a cover-letter box. You can still edit it on the page after filling."></textarea>
+        <div style="margin-top:14px;"><button id="btn-save-profile">Save profile</button> <span id="profile-saved" class="muted"></span></div>
+      </div>
+    </section>
+
+    <!-- COUNTRIES -->
+    <section id="tab-countries" class="hidden">
+      <div class="card">
+        <label>Country</label>
+        <select id="country-select"></select>
+        <div class="grid2" style="margin-top:10px;">
+          <div><label>Authorized to work here?</label>
+            <select data-c="authorizedToWork"><option value=""></option><option value="yes">Yes</option><option value="no">No</option></select></div>
+          <div><label>Need sponsorship (now or future)?</label>
+            <select data-c="needsSponsorship"><option value=""></option><option value="yes">Yes</option><option value="no">No</option></select></div>
+          <div><label>Visa type / status</label><input data-c="visaType" placeholder='e.g. "None", "EU Blue Card"' /></div>
+          <div><label>Work permit type</label><input data-c="workPermitType" placeholder='e.g. "Employment Pass"' /></div>
+          <div><label>Willing to relocate?</label>
+            <select data-c="willingToRelocate"><option value=""></option><option value="yes">Yes</option><option value="no">No</option></select></div>
+          <div><label>Notice period</label><input data-c="noticePeriod" placeholder="e.g. 30 days" /></div>
+          <div><label>Expected salary</label><input data-c="expectedSalary" placeholder="e.g. 90000" /></div>
+          <div><label>Currency</label><input data-c="salaryCurrency" placeholder="e.g. SGD" /></div>
+          <div><label>Salary answer format</label>
+            <select data-c="salaryAnswerFormat">
+              <option value=""></option>
+              <option value="exact-annual">Exact annual</option>
+              <option value="exact-monthly">Exact monthly</option>
+              <option value="range">Range</option>
+              <option value="negotiable">Negotiable</option>
+              <option value="ask">Ask me every time</option>
+            </select></div>
+          <div><label>Preferred cities</label><input data-c="preferredCities" placeholder="e.g. Berlin, Munich" /></div>
+        </div>
+        <label>Notes</label><textarea data-c="notes" rows="2" placeholder="Private notes about this market. Never filled into forms."></textarea>
+        <div style="margin-top:14px;"><button id="btn-save-country">Save country profile</button> <span id="country-saved" class="muted"></span></div>
+        <p class="muted">Visa answers are never guessed. If a value here is empty and a form asks for it, FireApply asks you instead of filling.</p>
+      </div>
+    </section>
+
+    <!-- RESUMES -->
+    <section id="tab-resumes" class="hidden">
+      <div class="card">
+        <h2>Add resume</h2>
+        <div class="grid2">
+          <div><label>Display name</label><input id="resume-name" placeholder="e.g. Germany .NET Resume" /></div>
+          <div><label>File (PDF/DOCX)</label><input id="resume-file" type="file" accept=".pdf,.doc,.docx" /></div>
+          <div><label>Countries (hold Ctrl to multi-select; none = general fallback)</label>
+            <select id="resume-countries" multiple size="5"></select></div>
+          <div><label>Role tag (optional)</label><input id="resume-role" placeholder="e.g. .NET Developer" />
+            <label style="margin-top:10px;"><input type="checkbox" id="resume-default" style="width:auto;" /> Use as default fallback</label></div>
+        </div>
+        <div style="margin-top:10px;"><button id="btn-add-resume">Add resume</button> <span id="resume-msg" class="muted"></span></div>
+      </div>
+      <div class="card">
+        <h2>Your resumes</h2>
+        <div id="resume-list"></div>
+      </div>
+    </section>
+
+    <!-- ANSWERS -->
+    <section id="tab-answers" class="hidden">
+      <div class="card">
+        <h2>Saved answers</h2>
+        <p class="muted">Collected while you apply. FireApply reuses them by scope: exact question &gt; company &gt; portal &gt; country &gt; global.</p>
+        <div id="answer-list"></div>
+      </div>
+    </section>
+
+    <!-- HISTORY -->
+    <section id="tab-history" class="hidden">
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h2 style="margin:0;">Application history</h2>
+          <button id="btn-export-xlsx">Export Excel tracker</button>
+        </div>
+        <div style="overflow-x:auto; margin-top:10px;">
+          <table id="history-table">
+            <thead><tr>
+              <th>Date</th><th>Company</th><th>Title</th><th>Country</th><th>Portal</th><th>Status</th><th>Resume</th><th></th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- BACKUP & SETTINGS -->
+    <section id="tab-backup" class="hidden">
+      <div class="card">
+        <h2>Encrypted backup</h2>
+        <p class="muted">Backups are encrypted with your master password. Restore requires the same password.</p>
+        <div class="row">
+          <button id="btn-export-backup">Export backup</button>
+          <button id="btn-import-backup" class="secondary">Import backup</button>
+          <input id="import-file" type="file" accept=".pja" class="hidden" />
+        </div>
+        <p id="backup-msg" class="muted"></p>
+      </div>
+      <div class="card">
+        <h2>Settings</h2>
+        <label>Auto-lock after inactivity (minutes, 0 = never)</label>
+        <input id="autolock" type="number" min="0" style="max-width:120px;" />
+        <div style="margin-top:10px;"><button id="btn-save-settings">Save settings</button> <span id="settings-msg" class="muted"></span></div>
+      </div>
+      <div class="card">
+        <h2>Danger zone</h2>
+        <button id="btn-wipe" class="danger">Delete all data</button>
+        <p class="muted">Removes profile, resumes, answers, and history permanently.</p>
+      </div>
+    </section>
+  </div>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

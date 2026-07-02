@@ -1,0 +1,21 @@
+{
+  "name": "fireapply",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal Job Application Assistant - Chrome extension (MV3)",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "esbuild": "^0.21.5",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}

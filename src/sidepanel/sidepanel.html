@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>FireApply Assistant</title>
+  <link rel="stylesheet" href="../styles.css" />
+  <style>
+    body { padding: 14px; }
+    .kv { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; font-size: 13px; }
+    .kv span:first-child { color: var(--muted); }
+    .kv span:last-child { text-align: right; }
+    .missing-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 8px 0; }
+    .missing-item .q-row { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 6px; }
+    .missing-item .q { font-size: 13px; flex: 1; }
+    .missing-item .dismiss {
+      flex: none; width: 22px; height: 22px; padding: 0; line-height: 1;
+      background: transparent; border: 1px solid var(--border); color: var(--muted);
+      border-radius: 6px; font-size: 12px;
+    }
+    .missing-item .dismiss:hover { background: var(--red); border-color: var(--red); color: #fff; }
+    .missing-item select, .missing-item input, .missing-item textarea { margin-bottom: 6px; }
+    .save-row { display: flex; gap: 6px; }
+    .save-row select { flex: 1; }
+  </style>
+</head>
+<body>
+  <h1>🔥 Assistant</h1>
+
+  <div id="locked-note" class="warning-box hidden">
+    Vault is locked. Open the FireApply popup and unlock it first.
+  </div>
+
+  <div id="no-job" class="muted">No job page analyzed yet. Open a job posting and click <b>Start Assist</b> in the popup.</div>
+
+  <div id="job-card" class="card hidden">
+    <div class="kv"><span>Job</span><span id="j-title">-</span></div>
+    <div class="kv"><span>Company</span><span id="j-company">-</span></div>
+    <div class="kv"><span>Location</span><span id="j-location">-</span></div>
+    <div class="kv"><span>Country <i class="tip" data-tip="Detected from the job's location text. Controls which resume, salary, and visa answers are used. If it says 'Not detected', country-specific questions will be asked instead of auto-filled.">i</i></span><span id="j-country">-</span></div>
+    <div class="kv"><span>Portal</span><span id="j-portal">-</span></div>
+    <div class="kv"><span>Resume <i class="tip" data-tip="Resume chosen for this job's country (or your default fallback). It is attached to upload fields automatically where the portal allows it.">i</i></span><span id="j-resume">-</span></div>
+    <div class="kv"><span>Status <i class="tip" data-tip="Tracked in your local application history. Becomes 'Submitted Manually' when you click Mark submitted after sending the application yourself.">i</i></span><span id="j-status" class="pill">-</span></div>
+  </div>
+
+  <div id="dup-warning" class="warning-box hidden"></div>
+  <div id="warnings"></div>
+
+  <div id="fill-summary" class="muted hidden"></div>
+
+  <div id="missing-section" class="hidden">
+    <h2>Needs your input <i class="tip" data-tip="Fields FireApply could not fill safely: no saved data, low-confidence match, or a visa/legal/EEO question that is never guessed. Answer here and it is typed into the form for you.">i</i></h2>
+    <div id="missing-list"></div>
+  </div>
+
+  <div id="next-hint" class="card hidden" style="border-color: var(--green);">
+    All known fields are filled. Review the page, then click <b>Next / Continue / Submit</b> yourself. FireApply never clicks buttons.
+  </div>
+
+  <div style="display:flex; gap:8px; margin-top:12px;">
+    <button id="btn-rerun" class="secondary" title="Scans the page you are on right now and fills every known field again. Use after logging in, moving to the next form step, or fixing your profile.">Scan &amp; fill this page</button>
+    <button id="btn-submitted">Mark submitted</button>
+  </div>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
