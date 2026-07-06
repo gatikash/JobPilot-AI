@@ -2,46 +2,62 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>FireApply</title>
+  <title>JobPilot AI</title>
   <link rel="stylesheet" href="../styles.css" />
   <style>
-    body { width: 320px; padding: 14px; }
-    .status-line { display: flex; justify-content: space-between; margin: 4px 0; font-size: 13px; }
+    body { width: 330px; padding: 14px; }
+    .status-line {
+      display: grid;
+      grid-template-columns: minmax(92px, .8fr) minmax(0, 1fr);
+      gap: 8px;
+      margin: 8px 0;
+      font-size: 13px;
+    }
+    .status-line span:last-child {
+      text-align: right;
+      font-weight: 750;
+      overflow-wrap: anywhere;
+    }
     .actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+    .popup-copy { margin: 0 0 12px; }
   </style>
 </head>
-<body>
-  <h1>🔥 FireApply</h1>
-
-  <div id="setup-view" class="hidden">
-    <p class="muted">First run: create a master password. It encrypts everything stored by this extension. There is no recovery if you forget it.</p>
-    <label>Master password <i class="tip" data-tip="Encrypts your profile, resumes, answers, and history with AES-256. Asked again after auto-lock or when Chrome restarts. There is NO recovery if forgotten - store it somewhere safe.">i</i></label>
-    <input type="password" id="setup-pass" autocomplete="new-password" placeholder="At least 8 characters" />
-    <label>Confirm password</label>
-    <input type="password" id="setup-pass2" autocomplete="new-password" placeholder="Repeat the password" />
-    <div class="actions"><button id="btn-create">Create vault</button></div>
-    <p id="setup-error" class="muted" style="color:var(--red)"></p>
+<body class="popup-page">
+  <div class="app-header">
+    <div class="brand">
+      <img class="brand-mark" src="../icons/icon48.png" alt="" aria-hidden="true" />
+      <div>
+        <div class="brand-title">JobPilot AI</div>
+        <div class="brand-subtitle">Job Application Companion</div>
+      </div>
+    </div>
   </div>
 
-  <div id="lock-view" class="hidden">
-    <label>Master password</label>
-    <input type="password" id="unlock-pass" autocomplete="current-password" />
-    <div class="actions"><button id="btn-unlock">Unlock</button></div>
-    <p id="unlock-error" class="muted" style="color:var(--red)"></p>
+  <div id="migrate-view" class="hidden">
+    <div class="card">
+      <p class="muted popup-copy">One-time update: JobPilot AI no longer uses a master password.
+        Enter your old password once to convert your existing data, and you will
+        never be asked again.</p>
+      <label>Old master password</label>
+      <input type="password" id="migrate-pass" autocomplete="current-password" />
+      <div class="actions">
+        <button id="btn-migrate">Convert my data</button>
+        <button id="btn-migrate-reset" class="danger">Forgot it - delete all data and start fresh</button>
+      </div>
+      <p id="migrate-error" class="muted" style="color:var(--red)"></p>
+    </div>
   </div>
 
   <div id="main-view" class="hidden">
     <div class="card">
-      <div class="status-line"><span class="muted">Vault <i class="tip" data-tip="Unlocked = your encrypted data is readable by the extension until auto-lock. Lock it any time with the button below.">i</i></span><span class="pill ok">Unlocked</span></div>
-      <div class="status-line"><span class="muted">Portal <i class="tip" data-tip="Job site detected on the current tab (Greenhouse, Lever, Workday, or generic). Determines which filling rules are used.">i</i></span><span id="st-portal">-</span></div>
-      <div class="status-line"><span class="muted">Country <i class="tip" data-tip="Country detected from the job's location text. Picks which resume, salary, and visa answers are used. If wrong or missing, FireApply asks before filling country-specific answers.">i</i></span><span id="st-country">-</span></div>
+      <div class="status-line"><span class="muted">Portal <i class="tip" data-tip="Job site detected on the current tab (Greenhouse, Lever, Workday, LinkedIn, or generic). Determines which filling rules are used.">i</i></span><span id="st-portal">-</span></div>
+      <div class="status-line"><span class="muted">Country <i class="tip" data-tip="Country detected from the job's location text. Picks which resume, salary, and visa answers are used. If wrong or missing, JobPilot AI asks before filling country-specific answers.">i</i></span><span id="st-country">-</span></div>
       <div class="status-line"><span class="muted">Resume <i class="tip" data-tip="Resume auto-selected for the detected country (falls back to your default). Confirm it in the side panel before it is attached.">i</i></span><span id="st-resume">-</span></div>
     </div>
     <div class="actions">
       <button id="btn-assist">Start Assist on this page</button>
       <button id="btn-panel" class="secondary">Open side panel</button>
       <button id="btn-options" class="secondary">Profile &amp; settings</button>
-      <button id="btn-lock" class="secondary">Lock vault</button>
     </div>
     <p id="assist-error" class="muted" style="color:var(--red)"></p>
   </div>

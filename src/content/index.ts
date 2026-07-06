@@ -22,7 +22,14 @@ function init(): void {
   chrome.runtime.onMessage.addListener((msg: ContentCommand, _sender, sendResponse) => {
     switch (msg.type) {
       case "startAssist":
-        void startAssist().then(() => sendResponse({ ok: true }));
+        void startAssist().then((result) => sendResponse({ ok: true, ...result }));
+        return true;
+      case "analyzePage":
+        if (window !== window.top) {
+          sendResponse({ ok: true, ignored: true });
+          return false;
+        }
+        void announceCurrentJob(true).then((result) => sendResponse({ ok: true, ...result }));
         return true;
       case "fillWithContext":
         void fillPage(msg.applicationId, msg.ctx).then(() => sendResponse({ ok: true }));
@@ -38,7 +45,7 @@ function init(): void {
         return false;
       }
       case "resumeAssist":
-        void startAssist().then(() => sendResponse({ ok: true }));
+        void startAssist().then((result) => sendResponse({ ok: true, ...result }));
         return true;
     }
   });
@@ -46,8 +53,122 @@ function init(): void {
   // Top frame announces the page automatically so the side panel has job info
   // before the user clicks Start Assist.
   if (window === window.top) {
-    whenReady(() => void analyzeAndReport());
+    whenReady(() => {
+      void announceCurrentJob();
+      watchLikelyApplied();
+      armSpaWatch();
+    });
   }
+}
+
+// LinkedIn (and other SPAs) swap jobs without a page load - watch the URL and
+// re-analyze so the side panel and match score follow the job you're viewing.
+let lastAnnouncedJobKey = "";
+
+function armSpaWatch(): void {
+  let lastUrl = location.href;
+  setInterval(() => {
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    setTimeout(() => {
+      void announceCurrentJob(true);
+      detectLikelyApplied();
+    }, 1200); // let the new job pane render
+  }, 1000);
+
+  if (detectPortal(location.href) === "linkedin") {
+    let timer: number | undefined;
+    const observer = new MutationObserver(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void announceCurrentJob(), 700);
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+}
+
+async function announceCurrentJob(force = false): Promise<{ applicationId?: string; job: JobInfo }> {
+  const result = await analyzeAndReport();
+  const key = jobKey(result.job);
+  if (!force && key && key === lastAnnouncedJobKey) return result;
+  if (key) lastAnnouncedJobKey = key;
+  if (result.job.title) {
+    void chrome.runtime.sendMessage({ type: "requestMatch" }).catch(() => undefined);
+  }
+  return result;
+}
+
+function jobKey(job: JobInfo): string {
+  const linkedInId = job.portal === "linkedin" ? linkedInJobId(job.url) : "";
+  if (linkedInId) return `linkedin:${linkedInId}`;
+  return [
+    job.url,
+    job.title.toLowerCase().replace(/\s+/g, " ").trim(),
+    job.company.toLowerCase().replace(/\s+/g, " ").trim(),
+  ].join("|");
+}
+
+function linkedInJobId(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.searchParams.get("currentJobId") ?? u.pathname.match(/\/jobs\/view\/(\d+)/)?.[1] ?? "";
+  } catch {
+    return url.match(/[?&]currentJobId=(\d+)/)?.[1] ?? url.match(/\/jobs\/view\/(\d+)/)?.[1] ?? "";
+  }
+}
+
+let lastLikelyAppliedKey = "";
+
+function watchLikelyApplied(): void {
+  detectLikelyApplied();
+  const observer = new MutationObserver(() => {
+    window.setTimeout(detectLikelyApplied, 300);
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+function detectLikelyApplied(): void {
+  if (window !== window.top) return;
+  if (detectPortal(location.href) === "linkedin") return;
+  const signal = findLikelyAppliedSignal();
+  if (!signal) return;
+  const key = `${signal.url}|${signal.reason}`;
+  if (key === lastLikelyAppliedKey) return;
+  lastLikelyAppliedKey = key;
+  void chrome.runtime.sendMessage({ type: "likelyApplied", signal }).catch(() => undefined);
+}
+
+function findLikelyAppliedSignal(): { reason: string; url: string; detectedAt: number } | null {
+  const url = location.href;
+  if (/[/?#](thank[-_]?you|confirmation|confirmed|submitted|success|application[-_]?submitted)([/?#=&]|$)/i.test(url)) {
+    return { reason: "The page URL looks like a submission confirmation.", url, detectedAt: Date.now() };
+  }
+
+  const text = visiblePageText().slice(0, 12000).toLowerCase();
+  const strongPatterns: RegExp[] = [
+    /\bthank you for (applying|your application)\b/,
+    /\byour application (has been|was) (submitted|received)\b/,
+    /\bapplication (submitted|received) successfully\b/,
+    /\bwe (have )?received your application\b/,
+    /\byou have successfully applied\b/,
+    /\bapplication already submitted\b/,
+    /\byou (have )?already applied\b/,
+  ];
+  for (const pattern of strongPatterns) {
+    const hit = text.match(pattern);
+    if (hit?.[0]) {
+      return { reason: `The page says "${hit[0]}".`, url, detectedAt: Date.now() };
+    }
+  }
+  return null;
+}
+
+function visiblePageText(): string {
+  const clone = document.body?.cloneNode(true) as HTMLElement | undefined;
+  if (!clone) return "";
+  if ("querySelectorAll" in clone) {
+    clone.querySelectorAll("script, style, noscript, svg").forEach((el) => el.remove());
+  }
+  return clone.innerText?.replace(/\s+/g, " ").trim() ?? "";
 }
 
 function whenReady(fn: () => void): void {
@@ -60,10 +181,12 @@ function whenReady(fn: () => void): void {
 
 // ---------- page analysis ----------
 
+const MAX_DESCRIPTION_CHARS = 7000;
+
 function extractJobInfo(): JobInfo {
   const url = location.href;
   const portal = detectPortal(url);
-  let title = "", company = "", locationText = "";
+  let title = "", company = "", locationText = "", applicants = "", description = "";
 
   // 1. JSON-LD JobPosting (most reliable when present)
   for (const script of document.querySelectorAll<HTMLScriptElement>('script[type="application/ld+json"]')) {
@@ -74,6 +197,9 @@ function extractJobInfo(): JobInfo {
         if (item && item["@type"] === "JobPosting") {
           title ||= item.title ?? "";
           company ||= item.hiringOrganization?.name ?? "";
+          if (typeof item.description === "string") {
+            description ||= stripHtml(item.description);
+          }
           const addr = item.jobLocation?.address ?? item.jobLocation?.[0]?.address;
           if (addr) {
             locationText ||= [addr.addressLocality, addr.addressRegion, addr.addressCountry]
@@ -89,26 +215,231 @@ function extractJobInfo(): JobInfo {
     title ||= textOf("h1.app-title") || textOf(".job__title h1") || textOf("h1");
     company ||= textOf(".company-name")?.replace(/^at\s+/i, "") || companyFromUrl(url, /greenhouse\.io\/(?:embed\/job_app\?for=)?([^/?&]+)/);
     locationText ||= textOf(".location") || textOf(".job__location");
+    description ||= textOf("#content") || textOf(".job__description");
   } else if (portal === "lever") {
     title ||= textOf(".posting-headline h2") || textOf("h2");
     company ||= companyFromUrl(url, /jobs\.(?:eu\.)?lever\.co\/([^/?#]+)/);
     locationText ||= textOf(".posting-categories .location") || textOf(".location");
+    description ||= textOf('[data-qa="job-description"]') || textOf(".posting-page");
   } else if (portal === "workday") {
     title ||= textOf('[data-automation-id="jobPostingHeader"]') || textOf("h1") || textOf("h2");
     locationText ||= textOf('[data-automation-id="locations"]') || textOf('[data-automation-id="location"]');
     company ||= companyFromUrl(url, /https:\/\/([^.]+)\./);
+    description ||= textOf('[data-automation-id="jobPostingDescription"]');
+  } else if (portal === "linkedin") {
+    // LinkedIn is read-only territory: we only look at the job the user has
+    // open. Class names change often, so try several and fall back broadly.
+    const linkedIn = linkedInJobDetails();
+    title ||= linkedIn.title;
+    company ||= linkedIn.company;
+    locationText ||= linkedIn.location;
+    applicants ||= linkedIn.applicants;
+    description ||= textOf("#job-details")
+      || textOf(".jobs-description__container")
+      || textOf(".jobs-description-content__text")
+      || textOf(".jobs-description__content")
+      || textOf(".jobs-box__html-content")
+      || textOf(".description__text")
+      || textOf('[data-job-description]');
+    description ||= linkedIn.description;
   } else {
     title ||= textOf("h1") || document.title;
     const metaSite = document.querySelector<HTMLMetaElement>('meta[property="og:site_name"]');
     company ||= metaSite?.content ?? "";
   }
 
+  // last-resort description: main content text (noisy but good enough to match)
+  description ||= visiblePageText();
+
   const countryCode = detectCountry(locationText, document.title, url);
-  return { title: title.trim(), company: company.trim(), location: locationText.trim(), countryCode, portal, url };
+  return {
+    title: title.trim(),
+    company: company.trim(),
+    location: locationText.trim(),
+    applicants: applicants.trim() || undefined,
+    countryCode,
+    portal,
+    url,
+    description: description.replace(/\s+/g, " ").trim().slice(0, MAX_DESCRIPTION_CHARS),
+  };
+}
+
+function stripHtml(html: string): string {
+  // DOMParser produces an inert document: nothing loads, nothing executes
+  return new DOMParser().parseFromString(html, "text/html").body.textContent ?? "";
 }
 
 function textOf(selector: string): string {
   return document.querySelector(selector)?.textContent?.trim() ?? "";
+}
+
+function textFrom(selectors: string[], root: ParentNode = document): string {
+  for (const selector of selectors) {
+    const text = root.querySelector(selector)?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    if (text) return text;
+  }
+  return "";
+}
+
+function textAll(selectors: string[], root: ParentNode = document): string[] {
+  const out: string[] = [];
+  for (const selector of selectors) {
+    root.querySelectorAll<HTMLElement>(selector).forEach((el) => {
+      if (!isVisible(el)) return;
+      const text = el.innerText?.replace(/\s+/g, " ").trim()
+        || el.textContent?.replace(/\s+/g, " ").trim()
+        || "";
+      if (text) out.push(text);
+    });
+  }
+  return [...new Set(out)];
+}
+
+function linkedInJobDetails(): { title: string; company: string; location: string; applicants: string; description: string } {
+  const topCard = document.querySelector<HTMLElement>(
+    ".job-details-jobs-unified-top-card, .jobs-unified-top-card, .top-card-layout, .jobs-search__job-details--container, main",
+  );
+  const searchRoot = topCard ?? document;
+  const title = textFrom([
+    ".job-details-jobs-unified-top-card__job-title a",
+    ".job-details-jobs-unified-top-card__job-title",
+    ".jobs-unified-top-card__job-title a",
+    ".jobs-unified-top-card__job-title",
+    ".job-details-jobs-unified-top-card__job-title h1",
+    ".jobs-unified-top-card__job-title h1",
+    ".job-details-jobs-unified-top-card__title",
+    '[data-test-job-title]',
+    ".top-card-layout__title",
+    "h1",
+  ], searchRoot) || linkedInTitleFromDocument();
+  const explicitCompany = cleanLinkedInMeta(textFrom([
+    ".job-details-jobs-unified-top-card__company-name a",
+    ".job-details-jobs-unified-top-card__company-name",
+    ".jobs-unified-top-card__company-name a",
+    ".jobs-unified-top-card__company-name",
+    ".jobs-unified-top-card__primary-description a[href*='/company/']",
+    ".job-details-jobs-unified-top-card__primary-description-container a[href*='/company/']",
+    ".jobs-unified-top-card__primary-description-container a[href*='/company/']",
+    "a[href*='linkedin.com/company/']",
+    "a[href^='/company/']",
+    ".topcard__org-name-link",
+  ], searchRoot)) || linkedInCompanyFromDocument();
+  const primaryText = textFrom([
+    ".job-details-jobs-unified-top-card__primary-description-container",
+    ".job-details-jobs-unified-top-card__primary-description",
+    ".jobs-unified-top-card__primary-description-container",
+    ".jobs-unified-top-card__primary-description",
+    ".topcard__flavor-row",
+  ], searchRoot);
+  const tertiaryText = textFrom([
+    ".job-details-jobs-unified-top-card__tertiary-description-container",
+    ".job-details-jobs-unified-top-card__secondary-description-container",
+    ".jobs-unified-top-card__tertiary-description-container",
+    ".jobs-unified-top-card__secondary-description-container",
+    ".jobs-unified-top-card__subtitle-secondary-grouping",
+  ], searchRoot);
+  const lines = [
+    ...textAll([
+      ".job-details-jobs-unified-top-card__primary-description-container",
+      ".job-details-jobs-unified-top-card__primary-description",
+      ".jobs-unified-top-card__primary-description-container",
+      ".jobs-unified-top-card__primary-description",
+      ".job-details-jobs-unified-top-card__tertiary-description-container",
+      ".job-details-jobs-unified-top-card__secondary-description-container",
+      ".jobs-unified-top-card__tertiary-description-container",
+      ".jobs-unified-top-card__secondary-description-container",
+      ".jobs-unified-top-card__subtitle-secondary-grouping",
+      ".jobs-unified-top-card__bullet",
+      ".job-details-jobs-unified-top-card__bullet",
+      ".topcard__flavor",
+      ".topcard__flavor-row",
+    ], searchRoot),
+    ...(searchRoot instanceof HTMLElement
+      ? (searchRoot.innerText
+        ?.split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean) ?? [])
+      : []),
+    primaryText,
+    tertiaryText,
+  ].filter(Boolean);
+  const parsed = parseLinkedInMeta(lines, title, explicitCompany);
+  const descriptionRoot = document.querySelector<HTMLElement>(
+    "#job-details, .jobs-description__container, .jobs-description-content__text, main",
+  );
+  return {
+    title,
+    company: explicitCompany || parsed.company,
+    location: parsed.location,
+    applicants: parsed.applicants,
+    description: descriptionRoot?.innerText?.replace(/\s+/g, " ").trim() || visiblePageText(),
+  };
+}
+
+function linkedInTitleFromDocument(): string {
+  return document.title
+    .replace(/\s*\|\s*LinkedIn.*$/i, "")
+    .replace(/\s+-\s+.+$/i, "")
+    .replace(/\s+at\s+.+$/i, "")
+    .trim();
+}
+
+function linkedInCompanyFromDocument(): string {
+  const cleaned = document.title.replace(/\s*\|\s*LinkedIn.*$/i, "").trim();
+  const atMatch = cleaned.match(/\s+at\s+(.+)$/i);
+  if (atMatch?.[1]) return cleanLinkedInMeta(atMatch[1]);
+  const dashParts = cleaned.split(/\s+-\s+/).map((part) => part.trim()).filter(Boolean);
+  return dashParts.length > 1 ? cleanLinkedInMeta(dashParts[dashParts.length - 1]) : "";
+}
+
+function parseLinkedInMeta(lines: string[], title: string, explicitCompany: string): { company: string; location: string; applicants: string } {
+  const applicants = parseApplicants(lines);
+  const candidates = lines
+    .flatMap((line) => line.split(/\s*(?:\u00b7|\u2022|\|)\s*|\s+-\s+/g))
+    .map((line) => cleanLinkedInMeta(line))
+    .filter((line) => line && !isLinkedInNoise(line));
+  const location = candidates.find((line) => looksLikeLocation(line, explicitCompany, title)) ?? "";
+  const company = explicitCompany || (candidates.find((line) =>
+    line !== title &&
+    line !== location &&
+    !looksLikeLocation(line, explicitCompany, title) &&
+    !line.toLowerCase().includes("linkedin") &&
+    line.length < 90) ?? "");
+  return { company, location, applicants };
+}
+
+function parseApplicants(lines: string[]): string {
+  for (const line of lines) {
+    const match = line.match(/\b(?:over\s+|less than\s+)?\d[\d,]*\+?\s+applicants?\b/i);
+    if (match?.[0]) return match[0].replace(/\s+/g, " ").trim();
+  }
+  return "";
+}
+
+function cleanLinkedInMeta(value: string): string {
+  return value
+    .replace(/\b(?:over\s+|less than\s+)?\d[\d,]*\+?\s*(applicants?|connections?)\b/gi, "")
+    .replace(/\b(reposted|posted|promoted)\b.*$/i, "")
+    .replace(/\b(easy apply|actively hiring|be an early applicant)\b/gi, "")
+    .replace(/\b(company logo|verified|follow|view profile)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/^(?:\u00b7|\u2022|\||-|\s)+|(?:\u00b7|\u2022|\||-|\s)+$/g, "")
+    .trim();
+}
+
+function isLinkedInNoise(value: string): boolean {
+  return /^(full-time|part-time|contract|temporary|internship|intern|associate|mid-senior level|entry level|director|executive)$/i.test(value)
+    || /^(?:over\s+|less than\s+)?\d[\d,]*\+?\s*(applicants?|connections?)$/i.test(value)
+    || /\b(reposted|posted|promoted|easy apply|be an early applicant|company logo|verified|follow)\b/i.test(value);
+}
+
+function looksLikeLocation(value: string, company = "", title = ""): boolean {
+  const normalized = value.toLowerCase();
+  if (!value || value === company || value === title) return false;
+  if (normalized.includes("applicant") || normalized.includes("connection")) return false;
+  return /\b(remote|hybrid|on-site|onsite|united states|usa|u\.s\.|india|canada|singapore|united kingdom|germany|australia|netherlands|ireland|uae)\b/i.test(value)
+    || /,\s*(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|IA|ID|IL|IN|KS|KY|LA|MA|MD|ME|MI|MN|MO|MS|MT|NC|ND|NE|NH|NJ|NM|NV|NY|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VA|VT|WA|WI|WV|WY)\b/.test(value)
+    || /^[A-Z][A-Za-z .'-]+,\s*[A-Z][A-Za-z .'-]+(?:,\s*[A-Z][A-Za-z .'-]+)?$/.test(value);
 }
 
 function companyFromUrl(url: string, re: RegExp): string {
@@ -134,7 +465,7 @@ function detectSafetyStops(): string[] {
   const bodyText = document.body?.innerText?.slice(0, 5000).toLowerCase() ?? "";
 
   if (hasLoginForm()) {
-    warnings.push("Login or signup detected. Log in manually; let Chrome save the password if it offers. FireApply resumes automatically after login.");
+    warnings.push("Login or signup detected. Log in manually; let Chrome save the password if it offers. JobPilot AI resumes automatically after login.");
   }
   if (document.querySelector('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], .g-recaptcha, .h-captcha, [data-sitekey]')) {
     warnings.push("CAPTCHA detected. Solve it manually before continuing.");
@@ -178,8 +509,16 @@ function armLoginWatch(): void {
 
 // ---------- assist flow ----------
 
-async function startAssist(): Promise<void> {
+async function startAssist(): Promise<{ applicationId?: string; job: JobInfo }> {
   const { applicationId, job } = await analyzeAndReport();
+
+  // LinkedIn is analyze/match only - never fill or touch its forms
+  // (account-risk line from the PRD stays intact)
+  if (job.portal === "linkedin") {
+    void chrome.runtime.sendMessage({ type: "requestMatch" }).catch(() => undefined);
+    toast("LinkedIn is match-only: check the side panel for your profile match. JobPilot AI never fills or automates LinkedIn.");
+    return { applicationId, job };
+  }
 
   const res = await chrome.runtime.sendMessage({
     type: "getFillContext",
@@ -189,14 +528,11 @@ async function startAssist(): Promise<void> {
   }).catch(() => undefined);
 
   if (!res?.ok) {
-    if (res?.error === "LOCKED") {
-      toast("FireApply is locked. Open the extension popup and unlock first.");
-    } else {
-      toast(res?.error ?? "FireApply could not start.");
-    }
-    return;
+    toast(res?.error ?? "JobPilot AI could not start.");
+    return { applicationId, job };
   }
   await fillPage(applicationId ?? "", res.ctx as FillContext);
+  return { applicationId, job };
 }
 
 const fieldRegistry = new Map<string, HTMLElement>();
@@ -402,7 +738,9 @@ function nearbyText(el: HTMLElement): string {
   let node: HTMLElement | null = el.parentElement;
   for (let depth = 0; node && depth < 3; depth++, node = node.parentElement) {
     const clone = node.cloneNode(true) as HTMLElement;
-    clone.querySelectorAll("input, textarea, select, button, option").forEach((c) => c.remove());
+    if ("querySelectorAll" in clone) {
+      clone.querySelectorAll("input, textarea, select, button, option").forEach((c) => c.remove());
+    }
     const text = clone.textContent?.replace(/\s+/g, " ").trim() ?? "";
     if (text.length > 2 && text.length < 300) return text;
   }
@@ -563,7 +901,7 @@ function toast(message: string): void {
     });
     document.documentElement.appendChild(toastEl);
   }
-  toastEl.textContent = `FireApply: ${message}`;
+  toastEl.textContent = `JobPilot AI: ${message}`;
   toastEl.style.display = "block";
   setTimeout(() => { if (toastEl) toastEl.style.display = "none"; }, 8000);
 }

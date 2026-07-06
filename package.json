@@ -1,8 +1,8 @@
 {
-  "name": "fireapply",
+  "name": "jobpilot-ai",
   "version": "0.1.0",
   "private": true,
-  "description": "Personal Job Application Assistant - Chrome extension (MV3)",
+  "description": "JobPilot AI - Job Application Companion Chrome extension (MV3)",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
@@ -16,6 +16,7 @@
     "typescript": "^5.5.4"
   },
   "dependencies": {
+    "pdfjs-dist": "^6.1.200",
     "xlsx": "^0.18.5"
   }
 }

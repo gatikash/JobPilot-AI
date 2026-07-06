@@ -1,23 +1,22 @@
-// Popup: vault setup/unlock, page status, assist trigger.
+// Popup: page status, assist trigger, and one-time legacy-vault migration.
 
-import { createVault, unlockVault, lockVault, isUnlocked } from "../lib/crypto";
-import { initStaticTips } from "../lib/tooltip";
-import { getCryptoMeta, setCryptoMeta } from "../lib/db";
+import { unlockLegacyVault } from "../lib/crypto";
+import { getCryptoMeta, migrateFromLegacyVault } from "../lib/db";
 import { SidePanelModel } from "../lib/messages";
+import { initStaticTips } from "../lib/tooltip";
 import { COUNTRIES } from "../lib/types";
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
-function show(view: "setup" | "lock" | "main"): void {
-  $("setup-view").classList.toggle("hidden", view !== "setup");
-  $("lock-view").classList.toggle("hidden", view !== "lock");
+function show(view: "migrate" | "main"): void {
+  $("migrate-view").classList.toggle("hidden", view !== "migrate");
   $("main-view").classList.toggle("hidden", view !== "main");
 }
 
 async function refresh(): Promise<void> {
-  const meta = await getCryptoMeta();
-  if (!meta) return show("setup");
-  if (!(await isUnlocked())) return show("lock");
+  // legacy password-protected vault present -> one-time conversion needed
+  const legacy = await getCryptoMeta();
+  if (legacy) return show("migrate");
   show("main");
 
   const res = await chrome.runtime.sendMessage({ type: "getSidePanelModel" }).catch(() => undefined);
@@ -30,49 +29,50 @@ async function refresh(): Promise<void> {
   }
 }
 
-$("btn-create").addEventListener("click", async () => {
-  const p1 = ($("setup-pass") as HTMLInputElement).value;
-  const p2 = ($("setup-pass2") as HTMLInputElement).value;
-  const err = $("setup-error");
-  err.textContent = "";
-  if (p1.length < 8) { err.textContent = "Use at least 8 characters."; return; }
-  if (p1 !== p2) { err.textContent = "Passwords do not match."; return; }
-  const meta = await createVault(p1);
-  await setCryptoMeta(meta);
-  await chrome.runtime.sendMessage({ type: "activity" }).catch(() => undefined);
-  await refresh();
-  chrome.runtime.openOptionsPage();
-});
-
-$("btn-unlock").addEventListener("click", async () => {
-  const pass = ($("unlock-pass") as HTMLInputElement).value;
-  const err = $("unlock-error");
+$("btn-migrate").addEventListener("click", async () => {
+  const err = $("migrate-error");
   err.textContent = "";
   const meta = await getCryptoMeta();
-  if (!meta) return;
-  if (await unlockVault(pass, meta)) {
-    await chrome.runtime.sendMessage({ type: "activity" }).catch(() => undefined);
+  if (!meta) { await refresh(); return; }
+  const pass = ($("migrate-pass") as HTMLInputElement).value;
+  const oldKey = await unlockLegacyVault(pass, meta);
+  if (!oldKey) { err.textContent = "Wrong password."; return; }
+  ($("btn-migrate") as HTMLButtonElement).disabled = true;
+  err.textContent = "";
+  try {
+    await migrateFromLegacyVault(oldKey);
     await refresh();
-  } else {
-    err.textContent = "Wrong password.";
+  } catch (e) {
+    err.textContent = `Migration failed: ${e instanceof Error ? e.message : String(e)}`;
+    ($("btn-migrate") as HTMLButtonElement).disabled = false;
   }
 });
 
-$("unlock-pass").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") $("btn-unlock").click();
+$("btn-migrate-reset").addEventListener("click", async () => {
+  if (!confirm("Delete ALL JobPilot AI data (profile, resumes, answers, history)? This cannot be undone.")) return;
+  indexedDB.deleteDatabase("fireapply");
+  await chrome.storage.local.clear();
+  await chrome.storage.session.clear();
+  await refresh();
 });
 
 $("btn-assist").addEventListener("click", async () => {
   $("assist-error").textContent = "";
-  const res = await chrome.runtime.sendMessage({ type: "startAssistOnActiveTab" }).catch(() => undefined);
-  if (!res?.ok) {
-    $("assist-error").textContent = res?.error ?? "Could not start assist.";
-    return;
-  }
-  // open the side panel so the user sees progress + missing fields
+  const btn = $("btn-assist") as HTMLButtonElement;
+  const original = btn.textContent || "Start Assist on this page";
+  btn.disabled = true;
+  btn.textContent = "Scanning...";
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab?.id !== undefined) {
     await chrome.sidePanel.open({ tabId: tab.id }).catch(() => undefined);
+  }
+  const res = await chrome.runtime.sendMessage({ type: "startAssistOnActiveTab" })
+    .catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+  if (!res?.ok) {
+    $("assist-error").textContent = res?.error ?? "Could not start assist.";
+    btn.disabled = false;
+    btn.textContent = original;
+    return;
   }
   window.close();
 });
@@ -86,11 +86,6 @@ $("btn-panel").addEventListener("click", async () => {
 });
 
 $("btn-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
-
-$("btn-lock").addEventListener("click", async () => {
-  await lockVault();
-  await refresh();
-});
 
 initStaticTips();
 void refresh();

@@ -1,17 +1,19 @@
 {
   "manifest_version": 3,
-  "name": "FireApply - Job Application Assistant",
-  "version": "0.3.0",
-  "description": "Personal job application assistant. Fills known fields from your local encrypted profile, selects country-specific resumes, and always leaves the final Submit to you. No AI, no cloud.",
+  "name": "JobPilot AI - Job Application Companion",
+  "version": "0.5.0",
+  "description": "AI-powered job application companion. Matches jobs to your resumes, fills known fields from your local profile, and always leaves the final Submit to you.",
   "minimum_chrome_version": "114",
-  "permissions": ["storage", "scripting", "activeTab", "sidePanel", "alarms"],
+  "permissions": ["storage", "scripting", "activeTab", "sidePanel"],
   "host_permissions": [
     "https://boards.greenhouse.io/*",
     "https://job-boards.greenhouse.io/*",
     "https://jobs.lever.co/*",
     "https://jobs.eu.lever.co/*",
-    "https://*.myworkdayjobs.com/*"
+    "https://*.myworkdayjobs.com/*",
+    "https://www.linkedin.com/jobs/*"
   ],
+  "optional_host_permissions": ["https://*/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -23,7 +25,8 @@
         "https://job-boards.greenhouse.io/*",
         "https://jobs.lever.co/*",
         "https://jobs.eu.lever.co/*",
-        "https://*.myworkdayjobs.com/*"
+        "https://*.myworkdayjobs.com/*",
+        "https://www.linkedin.com/jobs/*"
       ],
       "js": ["content.js"],
       "all_frames": true,

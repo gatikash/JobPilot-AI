@@ -2,63 +2,97 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>FireApply Assistant</title>
+  <title>JobPilot AI Assistant</title>
   <link rel="stylesheet" href="../styles.css" />
   <style>
-    body { padding: 14px; }
-    .kv { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; font-size: 13px; }
-    .kv span:first-child { color: var(--muted); }
-    .kv span:last-child { text-align: right; }
-    .missing-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 8px 0; }
-    .missing-item .q-row { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 6px; }
-    .missing-item .q { font-size: 13px; flex: 1; }
-    .missing-item .dismiss {
-      flex: none; width: 22px; height: 22px; padding: 0; line-height: 1;
-      background: transparent; border: 1px solid var(--border); color: var(--muted);
-      border-radius: 6px; font-size: 12px;
+    body { padding: 14px; min-width: 300px; }
+    #no-job { padding: 14px; }
+    .job-actions { margin-top: 12px; }
+    .job-actions button { width: 100%; }
+    .panel-footer {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 12px;
+      position: sticky;
+      bottom: 0;
+      padding: 10px 0 0;
+      background: linear-gradient(180deg, rgba(245, 247, 251, 0), var(--bg) 28%);
     }
-    .missing-item .dismiss:hover { background: var(--red); border-color: var(--red); color: #fff; }
-    .missing-item select, .missing-item input, .missing-item textarea { margin-bottom: 6px; }
-    .save-row { display: flex; gap: 6px; }
-    .save-row select { flex: 1; }
+    .panel-footer button { min-width: 0; }
+    #btn-analyze-profile { grid-column: 1 / -1; }
   </style>
 </head>
-<body>
-  <h1>🔥 Assistant</h1>
-
-  <div id="locked-note" class="warning-box hidden">
-    Vault is locked. Open the FireApply popup and unlock it first.
+<body class="sidepanel-page">
+  <div class="app-header">
+    <div class="brand">
+      <img class="brand-mark" src="../icons/icon48.png" alt="" aria-hidden="true" />
+      <div>
+        <div class="brand-title">JobPilot AI</div>
+        <div class="brand-subtitle">Job Application Companion</div>
+      </div>
+    </div>
   </div>
 
-  <div id="no-job" class="muted">No job page analyzed yet. Open a job posting and click <b>Start Assist</b> in the popup.</div>
+  <div id="no-job" class="card muted">No job page analyzed yet. Open a job posting and click <b>Start Assist</b> in the popup.</div>
 
   <div id="job-card" class="card hidden">
     <div class="kv"><span>Job</span><span id="j-title">-</span></div>
     <div class="kv"><span>Company</span><span id="j-company">-</span></div>
     <div class="kv"><span>Location</span><span id="j-location">-</span></div>
+    <div class="kv"><span>Applicants</span><span id="j-applicants">-</span></div>
     <div class="kv"><span>Country <i class="tip" data-tip="Detected from the job's location text. Controls which resume, salary, and visa answers are used. If it says 'Not detected', country-specific questions will be asked instead of auto-filled.">i</i></span><span id="j-country">-</span></div>
     <div class="kv"><span>Portal</span><span id="j-portal">-</span></div>
     <div class="kv"><span>Resume <i class="tip" data-tip="Resume chosen for this job's country (or your default fallback). It is attached to upload fields automatically where the portal allows it.">i</i></span><span id="j-resume">-</span></div>
-    <div class="kv"><span>Status <i class="tip" data-tip="Tracked in your local application history. Becomes 'Submitted Manually' when you click Mark submitted after sending the application yourself.">i</i></span><span id="j-status" class="pill">-</span></div>
+    <div class="kv"><span>Status <i class="tip" data-tip="Tracked locally. A job stays Viewed internally until you save it for later or mark it as applied.">i</i></span><span id="j-status" class="pill">-</span></div>
+    <div class="job-actions">
+      <button id="btn-save-later" class="secondary">Save for later</button>
+    </div>
   </div>
 
-  <div id="dup-warning" class="warning-box hidden"></div>
-  <div id="warnings"></div>
+  <div id="match-card" class="card match-shell hidden">
+    <div class="match-hero">
+      <div class="score-ring">
+        <div id="match-overall" class="score-value">-</div>
+        <div class="score-label">Score</div>
+      </div>
+      <div>
+        <div class="match-title">
+          <b>Match Score <i class="tip" data-tip="How well this job's requirements overlap each of your resumes. 'Keyword estimate' is a free offline approximation; the AI score (configure in Settings > AI Matching) is semantic and more reliable. Use the best-scoring resume when applying.">i</i></b>
+        </div>
+        <div id="match-status" class="muted"></div>
+        <div id="match-recommend"></div>
+      </div>
+    </div>
+    <div class="match-body">
+      <div id="match-profiles"></div>
+      <div id="match-missing"></div>
+      <div class="action-row">
+        <button id="btn-match" class="secondary">Match this job</button>
+        <button id="btn-tailor" class="secondary">Tailor resume</button>
+      </div>
+      <div id="tailor-panel" class="tailor-panel hidden"></div>
+    </div>
+  </div>
 
-  <div id="fill-summary" class="muted hidden"></div>
+  <div id="warnings"></div>
+  <div id="likely-applied" class="warning-box hidden"></div>
+
+  <div id="fill-summary" class="summary-strip hidden"></div>
 
   <div id="missing-section" class="hidden">
-    <h2>Needs your input <i class="tip" data-tip="Fields FireApply could not fill safely: no saved data, low-confidence match, or a visa/legal/EEO question that is never guessed. Answer here and it is typed into the form for you.">i</i></h2>
+    <h2>Needs your input <i class="tip" data-tip="Fields JobPilot AI could not fill safely: no saved data, low-confidence match, or a visa/legal/EEO question that is never guessed. Answer here and it is typed into the form for you.">i</i></h2>
     <div id="missing-list"></div>
   </div>
 
-  <div id="next-hint" class="card hidden" style="border-color: var(--green);">
-    All known fields are filled. Review the page, then click <b>Next / Continue / Submit</b> yourself. FireApply never clicks buttons.
+  <div id="next-hint" class="card success-card hidden">
+    All known fields are filled. Review the page, then click <b>Next / Continue / Submit</b> yourself. JobPilot AI never clicks buttons.
   </div>
 
-  <div style="display:flex; gap:8px; margin-top:12px;">
-    <button id="btn-rerun" class="secondary" title="Scans the page you are on right now and fills every known field again. Use after logging in, moving to the next form step, or fixing your profile.">Scan &amp; fill this page</button>
-    <button id="btn-submitted">Mark submitted</button>
+  <div class="panel-footer">
+    <button id="btn-analyze-profile" title="Analyzes the current job against your profile/resumes without filling the form. Use when the page loaded but the match score did not appear.">Analyze profile</button>
+    <button id="btn-rerun" class="secondary" title="Scans the page you are on right now and fills every known field again. Use after logging in, moving to the next form step, or fixing your profile.">Scan &amp; fill</button>
+    <button id="btn-submitted">Mark as Applied</button>
   </div>
 
   <script type="module" src="sidepanel.js"></script>

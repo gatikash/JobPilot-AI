@@ -77,6 +77,8 @@ export interface ResumeMeta {
   countryCodes: string[]; // mapped countries; empty = fallback/general
   role: string;
   isDefault: boolean;
+  /** plain text extracted from the PDF (or pasted by the user) for AI matching */
+  extractedText: string;
   updatedAt: number;
 }
 
@@ -96,6 +98,12 @@ export interface SavedAnswer {
 
 export type ApplicationStatus =
   | "Viewed"
+  | "Saved"
+  | "Applied"
+  | "Shortlisted"
+  | "Interview Scheduled"
+  | "Rejected"
+  | "Offer"
   | "Started"
   | "Login Required"
   | "Waiting for User"
@@ -137,15 +145,93 @@ export type Portal =
   | "workday"
   | "indeed"
   | "naukri"
+  | "linkedin"
   | "generic";
 
 export interface JobInfo {
   title: string;
   company: string;
   location: string;
+  /** public job-page applicant count when the portal exposes it */
+  applicants?: string;
   countryCode: string; // "" when undetected
   portal: Portal;
   url: string;
+  /** job description text (truncated), used for AI matching */
+  description?: string;
+}
+
+// ---- AI matching ----
+
+export type AiProvider = "openrouter" | "openai" | "anthropic" | "custom";
+
+export interface AiConfig {
+  enabled: boolean;
+  autoMatch: boolean;
+  provider: AiProvider;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  updatedAt: number;
+}
+
+export function defaultAiConfig(): AiConfig {
+  return {
+    enabled: false,
+    autoMatch: true,
+    provider: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    apiKey: "",
+    model: "google/gemini-2.0-flash-lite-001",
+    updatedAt: 0,
+  };
+}
+
+export const AI_PROVIDER_PRESETS: Record<AiProvider, { baseUrl: string; modelHint: string }> = {
+  openrouter: { baseUrl: "https://openrouter.ai/api/v1", modelHint: "google/gemini-2.0-flash-lite-001" },
+  openai: { baseUrl: "https://api.openai.com/v1", modelHint: "gpt-4o-mini" },
+  anthropic: { baseUrl: "https://api.anthropic.com", modelHint: "claude-haiku-4-5-20251001" },
+  custom: { baseUrl: "", modelHint: "model-name" },
+};
+
+export interface ProfileMatch {
+  name: string;      // resume/profile name
+  percent: number;   // 0-100
+  reason: string;    // one-line explanation
+}
+
+export interface MatchResult {
+  jobUrl: string;
+  overall: number;             // 0-100
+  profiles: ProfileMatch[];
+  missingKeywords: string[];
+  recommendedResume: string;
+  source: "ai" | "local";      // local = keyword estimate fallback
+  model?: string;
+  error?: string;
+  createdAt: number;
+}
+
+export interface DraftAnswerResult {
+  question: string;
+  answer: string;
+  source: "ai" | "local";
+  model?: string;
+  error?: string;
+  createdAt: number;
+}
+
+export interface ResumeTailoringResult {
+  jobUrl: string;
+  resumeName: string;
+  summary: string;
+  keywordsToAdd: string[];
+  suggestedBullets: string[];
+  notes: string[];
+  source: "ai" | "local";
+  model?: string;
+  error?: string;
+  createdAt: number;
 }
 
 export type FieldKind =
@@ -173,6 +259,12 @@ export interface FillReport {
   missing: MissingField[];
   warnings: string[];
   resumeAttached: boolean;
+}
+
+export interface LikelyAppliedSignal {
+  reason: string;
+  url: string;
+  detectedAt: number;
 }
 
 /** Non-sensitive workflow snapshot kept in chrome.storage.session. */

@@ -40,6 +40,12 @@ await esbuild.build({
   splitting: false,
 });
 
+// pdf.js worker (loaded by the options page for resume text extraction)
+cpSync(
+  "node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+  `${outdir}/options/pdf.worker.min.mjs`,
+);
+
 // Static assets
 cpSync("src/popup/popup.html", `${outdir}/popup/popup.html`);
 cpSync("src/sidepanel/sidepanel.html", `${outdir}/sidepanel/sidepanel.html`);

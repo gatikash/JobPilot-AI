@@ -10,6 +10,7 @@ export function detectPortal(url: string): Portal {
   if (u.includes("myworkdayjobs.com") || u.includes("workday")) return "workday";
   if (u.includes("indeed.")) return "indeed";
   if (u.includes("naukri.com")) return "naukri";
+  if (u.includes("linkedin.com")) return "linkedin";
   return "generic";
 }
 
@@ -20,6 +21,10 @@ export function detectPortal(url: string): Portal {
 export function detectCountry(locationText: string, pageTitle = "", url = ""): string {
   const hits = new Set<string>();
   const loc = ` ${locationText.toLowerCase()} `;
+  if (/\b(united states|usa|u\.s\.|remote\s*[-,]\s*us)\b/.test(loc)
+    || /,\s*(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|ia|id|il|in|ks|ky|la|ma|md|me|mi|mn|mo|ms|mt|nc|nd|ne|nh|nj|nm|nv|ny|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|va|vt|wa|wi|wv|wy)\b/.test(loc)) {
+    return "US";
+  }
   for (const c of COUNTRIES) {
     if (c.keywords.some((k) => loc.includes(k))) hits.add(c.code);
   }

@@ -1,11 +1,17 @@
-// Master-password encryption. PBKDF2-SHA256 -> AES-256-GCM.
-// The derived key lives only in chrome.storage.session (memory-backed,
-// cleared when the browser closes) so every extension context can use it
-// while the vault is unlocked, and nothing sensitive is ever written to disk
-// unencrypted.
+// Data-at-rest encryption with an automatic key: AES-256-GCM under a random
+// key generated on first run and persisted in chrome.storage.local. No
+// master password - the trust model is "whoever can use this Chrome profile
+// owns the data" (same as Chrome's own saved passwords without a sync
+// passphrase). The key obfuscates the IndexedDB contents against casual
+// inspection; it is NOT protection against someone with full access to the
+// OS user account.
+//
+// PBKDF2 pieces below remain only to unlock and migrate legacy
+// password-protected vaults created by older versions.
 
 const PBKDF2_ITERATIONS = 310_000;
 const VERIFIER_PLAINTEXT = "fireapply-verifier-v1";
+const AUTO_KEY_STORAGE = "autoVaultKeyB64";
 
 export interface CryptoMeta {
   saltB64: string;
@@ -40,56 +46,68 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
     ["encrypt", "decrypt"]);
 }
 
-export async function createVault(password: string): Promise<CryptoMeta> {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await deriveKey(password, salt);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: iv as BufferSource }, key,
-    new TextEncoder().encode(VERIFIER_PLAINTEXT));
-  await storeSessionKey(key);
-  return { saltB64: b64(salt), verifierIvB64: b64(iv), verifierCtB64: b64(ct) };
+let cachedKey: CryptoKey | null = null;
+
+/** The automatic vault key - created on first use, then reused forever. */
+export async function getSessionKey(): Promise<CryptoKey | null> {
+  if (cachedKey) return cachedKey;
+  const stored = await chrome.storage.local.get(AUTO_KEY_STORAGE);
+  let raw: Uint8Array;
+  if (stored[AUTO_KEY_STORAGE]) {
+    raw = unb64(stored[AUTO_KEY_STORAGE]);
+  } else {
+    raw = crypto.getRandomValues(new Uint8Array(32));
+    await chrome.storage.local.set({ [AUTO_KEY_STORAGE]: b64(raw) });
+  }
+  cachedKey = await crypto.subtle.importKey(
+    "raw", raw as BufferSource, { name: "AES-GCM" }, true,
+    ["encrypt", "decrypt"]);
+  return cachedKey;
 }
 
-/** Returns true and caches the key in session storage when password is correct. */
-export async function unlockVault(password: string, meta: CryptoMeta): Promise<boolean> {
+/** Always true now - kept so callers don't need to change shape. */
+export async function isUnlocked(): Promise<boolean> {
+  return true;
+}
+
+/**
+ * Unlock a legacy password-protected vault (pre-0.5 versions) so its data
+ * can be migrated to the automatic key. Returns the old key or null when
+ * the password is wrong.
+ */
+export async function unlockLegacyVault(password: string, meta: CryptoMeta): Promise<CryptoKey | null> {
   const key = await deriveKey(password, unb64(meta.saltB64));
   try {
     const pt = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: unb64(meta.verifierIvB64) as BufferSource }, key,
       unb64(meta.verifierCtB64) as BufferSource);
-    if (new TextDecoder().decode(pt) !== VERIFIER_PLAINTEXT) return false;
+    if (new TextDecoder().decode(pt) !== VERIFIER_PLAINTEXT) return null;
   } catch {
-    return false;
+    return null;
   }
-  await storeSessionKey(key);
-  return true;
-}
-
-export async function lockVault(): Promise<void> {
-  await chrome.storage.session.remove("vaultKey");
-}
-
-async function storeSessionKey(key: CryptoKey): Promise<void> {
-  const raw = await crypto.subtle.exportKey("raw", key);
-  await chrome.storage.session.set({ vaultKey: b64(raw) });
-}
-
-export async function getSessionKey(): Promise<CryptoKey | null> {
-  const { vaultKey } = await chrome.storage.session.get("vaultKey");
-  if (!vaultKey) return null;
-  return crypto.subtle.importKey(
-    "raw", unb64(vaultKey) as BufferSource, { name: "AES-GCM" }, true,
-    ["encrypt", "decrypt"]);
-}
-
-export async function isUnlocked(): Promise<boolean> {
-  return (await getSessionKey()) !== null;
+  return key;
 }
 
 export interface EncryptedBox {
   ivB64: string;
   ctB64: string;
+}
+
+/** Password-protected box for backup files (salt embedded, portable across machines). */
+export interface PasswordBox extends EncryptedBox {
+  saltB64: string;
+}
+
+export async function encryptJsonWithPassword(value: unknown, password: string): Promise<PasswordBox> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await deriveKey(password, salt);
+  const box = await encryptJson(value, key);
+  return { ...box, saltB64: b64(salt) };
+}
+
+export async function decryptJsonWithPassword<T>(box: PasswordBox, password: string): Promise<T> {
+  const key = await deriveKey(password, unb64(box.saltB64));
+  return decryptJson<T>(box, key);
 }
 
 export async function encryptJson(value: unknown, key: CryptoKey): Promise<EncryptedBox> {

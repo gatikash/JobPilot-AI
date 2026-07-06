@@ -2,20 +2,286 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>FireApply Settings</title>
+  <title>JobPilot AI Settings</title>
   <link rel="stylesheet" href="../styles.css" />
   <style>
-    body { max-width: 860px; margin: 0 auto; padding: 24px; }
+    body { max-width: 980px; margin: 0 auto; padding: 24px; }
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
     .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 16px; }
     #locked-overlay { text-align: center; padding: 60px 0; }
+    #content > section > .card { padding: 18px; }
+    #history-table .job-link {
+      display: inline-block;
+      white-space: nowrap;
+      color: #fff;
+      background: #1d4ed8;
+      border: 1px solid #1d4ed8;
+      border-radius: 6px;
+      padding: 5px 9px;
+      font-weight: 700;
+      text-decoration: none;
+      box-shadow: 0 5px 12px rgba(37, 99, 235, .16);
+    }
+    #history-table .job-link:hover,
+    #history-table .job-link:focus-visible {
+      background: #1e40af;
+      color: #fff;
+      outline: none;
+    }
+    #history-table .history-status { min-width: 150px; padding: 5px 8px; }
+    #history-table td:nth-child(2),
+    #history-table td:nth-child(3) { overflow-wrap: anywhere; }
+    #tab-history > .card {
+      width: min(1280px, calc(100vw - 48px));
+      margin-left: 50%;
+      transform: translateX(-50%);
+    }
+    .history-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .view-switch {
+      display: inline-flex;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #eaf0f8;
+    }
+    .view-switch button {
+      padding: 7px 10px;
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+      box-shadow: none;
+    }
+    .view-switch button.active {
+      background: #fff;
+      border-color: var(--border);
+      color: var(--accent);
+      box-shadow: var(--shadow-soft);
+    }
+    .history-board {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      margin: 16px -4px 0;
+      padding: 14px;
+      overflow-x: auto;
+      background: #eef4ff;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      scroll-snap-type: x proximity;
+    }
+    .history-column {
+      flex: 0 0 282px;
+      min-width: 282px;
+      max-height: 70vh;
+      overflow-y: auto;
+      background: #f8fbff;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 10px;
+      scroll-snap-align: start;
+    }
+    .history-column-head {
+      position: sticky;
+      top: -10px;
+      z-index: 2;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin: -10px -10px 10px;
+      padding: 11px 10px;
+      background: rgba(248, 251, 255, .96);
+      border-bottom: 1px solid var(--border);
+      border-radius: 14px 14px 0 0;
+      font-weight: 850;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .history-column-head span:first-child {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .history-column-head span:first-child::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--muted-2);
+    }
+    .history-column-applied .history-column-head span:first-child::before,
+    .history-column-shortlisted .history-column-head span:first-child::before,
+    .history-column-interview-scheduled .history-column-head span:first-child::before,
+    .history-column-offer .history-column-head span:first-child::before { background: var(--green); }
+    .history-column-saved .history-column-head span:first-child::before { background: var(--accent); }
+    .history-column-rejected .history-column-head span:first-child::before { background: var(--red); }
+    .history-count {
+      display: inline-flex;
+      min-width: 24px;
+      height: 22px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .history-card {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      padding: 12px;
+      margin-bottom: 10px;
+      background: #fff;
+      border: 1px solid var(--border);
+      border-left: 4px solid #cbd5e1;
+      border-radius: 12px;
+      box-shadow: var(--shadow-soft);
+    }
+    .history-card:hover {
+      border-color: var(--border-strong);
+      box-shadow: var(--shadow);
+    }
+    .history-card.status-applied,
+    .history-card.status-shortlisted,
+    .history-card.status-interview-scheduled,
+    .history-card.status-offer { border-left-color: var(--green); }
+    .history-card.status-saved { border-left-color: var(--accent); }
+    .history-card.status-rejected { border-left-color: var(--red); }
+    .history-card-title {
+      font-size: 14px;
+      font-weight: 850;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+    .history-card-company {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+      overflow-wrap: anywhere;
+    }
+    .history-card-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .history-card .pill {
+      max-width: 100%;
+      min-height: 22px;
+      padding: 2px 8px;
+      font-size: 10px;
+    }
+    .history-card .history-status {
+      min-width: 0;
+      width: 100%;
+      padding: 7px 9px;
+      background: var(--panel-tint);
+      font-size: 12px;
+    }
+    .history-card-actions {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 7px;
+      align-items: center;
+    }
+    .history-card .job-link {
+      justify-self: start;
+      display: inline-flex;
+      color: #fff;
+      background: #1d4ed8;
+      border: 1px solid #1d4ed8;
+      border-radius: 6px;
+      padding: 5px 9px;
+      font-weight: 800;
+      font-size: 12px;
+      text-decoration: none;
+    }
+    .history-card-actions button {
+      width: 32px;
+      height: 31px;
+      padding: 0;
+    }
+    .history-delete {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 31px;
+      padding: 0;
+      border-color: #fecaca;
+      background: #fff;
+      color: var(--red);
+      box-shadow: none;
+    }
+    .history-delete:hover,
+    .history-delete:focus-visible {
+      background: var(--red);
+      border-color: var(--red);
+      color: #fff;
+      outline: none;
+    }
+    .history-delete svg {
+      width: 15px;
+      height: 15px;
+      stroke: currentColor;
+      stroke-width: 2.2;
+      fill: none;
+      pointer-events: none;
+    }
+    .history-empty {
+      margin: 0;
+      padding: 22px 8px;
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, .55);
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+    }
+    .settings-top { margin-bottom: 18px; }
+    .options-page > h1 { display: none; }
+    @media (max-width: 760px) {
+      body { padding: 16px; }
+      .grid2, .grid3 { grid-template-columns: 1fr; }
+      .row { flex-direction: column; }
+      #tab-history > .card {
+        width: calc(100vw - 24px);
+      }
+      .history-board {
+        padding: 10px;
+        margin-left: -2px;
+        margin-right: -2px;
+      }
+      .history-column {
+        flex-basis: min(284px, 84vw);
+        min-width: min(284px, 84vw);
+      }
+    }
   </style>
 </head>
-<body>
-  <h1>🔥 FireApply Settings</h1>
+<body class="options-page">
+  <div class="app-header settings-top">
+    <div class="brand">
+      <img class="brand-mark" src="../icons/icon48.png" alt="" aria-hidden="true" />
+      <div>
+        <div class="brand-title">JobPilot AI Settings</div>
+        <div class="brand-subtitle">Job Application Companion</div>
+      </div>
+    </div>
+  </div>
+  <h1>JobPilot AI Settings</h1>
 
   <div id="locked-overlay" class="hidden">
-    <p class="muted">Vault is locked or not set up. Use the extension popup to unlock, then reload this page.</p>
+    <p class="muted">One-time update needed: open the JobPilot AI popup to convert your existing data (no more passwords after that), then reload this page.</p>
   </div>
 
   <div id="content" class="hidden">
@@ -24,6 +290,7 @@
       <button data-tab="countries">Countries &amp; Visa</button>
       <button data-tab="resumes">Resumes</button>
       <button data-tab="answers">Saved Answers</button>
+      <button data-tab="ai">AI Matching</button>
       <button data-tab="history">History</button>
       <button data-tab="backup">Backup &amp; Settings</button>
     </div>
@@ -115,7 +382,7 @@
         </div>
         <label>Notes</label><textarea data-c="notes" rows="2" placeholder="Private notes about this market. Never filled into forms."></textarea>
         <div style="margin-top:14px;"><button id="btn-save-country">Save country profile</button> <span id="country-saved" class="muted"></span></div>
-        <p class="muted">Visa answers are never guessed. If a value here is empty and a form asks for it, FireApply asks you instead of filling.</p>
+        <p class="muted">Visa answers are never guessed. If a value here is empty and a form asks for it, JobPilot AI asks you instead of filling.</p>
       </div>
     </section>
 
@@ -125,7 +392,8 @@
         <h2>Add resume</h2>
         <div class="grid2">
           <div><label>Display name</label><input id="resume-name" placeholder="e.g. Germany .NET Resume" /></div>
-          <div><label>File (PDF/DOCX)</label><input id="resume-file" type="file" accept=".pdf,.doc,.docx" /></div>
+          <div><label>File (PDF/DOCX)</label><input id="resume-file" type="file" accept=".pdf,.doc,.docx" />
+            <span class="muted">PDF text is extracted automatically for AI matching; for DOC/DOCX paste the text afterwards.</span></div>
           <div><label>Countries (hold Ctrl to multi-select; none = general fallback)</label>
             <select id="resume-countries" multiple size="5"></select></div>
           <div><label>Role tag (optional)</label><input id="resume-role" placeholder="e.g. .NET Developer" />
@@ -143,22 +411,70 @@
     <section id="tab-answers" class="hidden">
       <div class="card">
         <h2>Saved answers</h2>
-        <p class="muted">Collected while you apply. FireApply reuses them by scope: exact question &gt; company &gt; portal &gt; country &gt; global.</p>
+        <p class="muted">Collected while you apply. JobPilot AI reuses them by scope: exact question &gt; company &gt; portal &gt; country &gt; global.</p>
         <div id="answer-list"></div>
+      </div>
+    </section>
+
+    <!-- AI MATCHING -->
+    <section id="tab-ai" class="hidden">
+      <div class="card">
+        <h2>Job match scoring</h2>
+        <p class="muted">
+          Scores every job page against your resumes ("Software development: 80%,
+          Project management: 30%") so you know which resume to attach.
+          A free offline keyword estimate always works; connect your own AI key
+          for much smarter semantic scores.
+          <b>Privacy note:</b> with AI enabled, the job description and your
+          resume text are sent to the provider you configure below. Your API key
+          is stored encrypted in the vault.
+        </p>
+        <div class="grid2">
+          <div>
+            <label>Provider</label>
+            <select id="ai-provider">
+              <option value="openrouter">OpenRouter (recommended - one key, all models)</option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="custom">Custom (OpenAI-compatible URL)</option>
+            </select>
+          </div>
+          <div><label>Model</label><input id="ai-model" placeholder="e.g. google/gemini-2.0-flash-lite-001" /></div>
+          <div><label>Base URL</label><input id="ai-baseurl" placeholder="https://openrouter.ai/api/v1" /></div>
+          <div><label>API key</label><input id="ai-key" type="password" placeholder="sk-..." autocomplete="off" /></div>
+        </div>
+        <label style="margin-top:10px;"><input type="checkbox" id="ai-enabled" style="width:auto;" /> Enable AI matching</label>
+        <label><input type="checkbox" id="ai-auto" style="width:auto;" checked /> Match automatically when a job page opens</label>
+        <div style="margin-top:12px; display:flex; gap:8px;">
+          <button id="btn-save-ai">Save AI settings</button>
+          <button id="btn-test-ai" class="secondary">Test connection</button>
+          <span id="ai-msg" class="muted" style="align-self:center;"></span>
+        </div>
+        <p class="muted">Cheap/fast models are enough for scoring — e.g.
+          <code>google/gemini-2.0-flash-lite-001</code> or <code>deepseek/deepseek-chat</code> on OpenRouter,
+          <code>gpt-4o-mini</code> on OpenAI, <code>claude-haiku-4-5-20251001</code> on Anthropic.
+          Results are cached per job, so re-opening a job costs nothing.</p>
       </div>
     </section>
 
     <!-- HISTORY -->
     <section id="tab-history" class="hidden">
       <div class="card">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="history-toolbar">
           <h2 style="margin:0;">Application history</h2>
-          <button id="btn-export-xlsx">Export Excel tracker</button>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <div class="view-switch" aria-label="History view">
+              <button id="btn-history-board" type="button" class="active">Board view</button>
+              <button id="btn-history-grid" type="button">Grid view</button>
+            </div>
+            <button id="btn-export-xlsx">Export Excel tracker</button>
+          </div>
         </div>
-        <div style="overflow-x:auto; margin-top:10px;">
+        <div id="history-board" class="history-board"></div>
+        <div id="history-grid" class="hidden" style="overflow-x:auto; margin-top:10px;">
           <table id="history-table">
             <thead><tr>
-              <th>Date</th><th>Company</th><th>Title</th><th>Country</th><th>Portal</th><th>Status</th><th>Resume</th><th></th>
+              <th>Date</th><th>Company</th><th>Title</th><th>Country</th><th>Portal</th><th>Job URL</th><th>Status</th><th></th>
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -170,19 +486,13 @@
     <section id="tab-backup" class="hidden">
       <div class="card">
         <h2>Encrypted backup</h2>
-        <p class="muted">Backups are encrypted with your master password. Restore requires the same password.</p>
+        <p class="muted">Backups are encrypted with a password you choose at export time. Restoring (here or on another machine) requires that same password.</p>
         <div class="row">
           <button id="btn-export-backup">Export backup</button>
           <button id="btn-import-backup" class="secondary">Import backup</button>
           <input id="import-file" type="file" accept=".pja" class="hidden" />
         </div>
         <p id="backup-msg" class="muted"></p>
-      </div>
-      <div class="card">
-        <h2>Settings</h2>
-        <label>Auto-lock after inactivity (minutes, 0 = never)</label>
-        <input id="autolock" type="number" min="0" style="max-width:120px;" />
-        <div style="margin-top:10px;"><button id="btn-save-settings">Save settings</button> <span id="settings-msg" class="muted"></span></div>
       </div>
       <div class="card">
         <h2>Danger zone</h2>

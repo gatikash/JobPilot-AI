@@ -10,11 +10,11 @@ import {
 } from "./crypto";
 import {
   UserProfile, CountryProfile, ResumeMeta, SavedAnswer, ApplicationRecord,
-  emptyProfile,
+  AiConfig, defaultAiConfig, emptyProfile,
 } from "./types";
 
 const DB_NAME = "fireapply";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 // object stores
 const S_KV = "kv";               // plaintext: cryptoMeta, settings
@@ -24,6 +24,7 @@ const S_RESUME_META = "resumeMeta";  // encrypted, key id
 const S_FILES = "files";         // encrypted bytes, key resume id
 const S_ANSWERS = "savedAnswers";    // encrypted, key id
 const S_APPS = "applications";       // encrypted, key id
+const S_SECURE = "secure";           // encrypted misc (AI config with API key)
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -33,7 +34,7 @@ function openDb(): Promise<IDBDatabase> {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      for (const name of [S_KV, S_PROFILE, S_COUNTRY, S_RESUME_META, S_FILES, S_ANSWERS, S_APPS]) {
+      for (const name of [S_KV, S_PROFILE, S_COUNTRY, S_RESUME_META, S_FILES, S_ANSWERS, S_APPS, S_SECURE]) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       }
     };
@@ -99,6 +100,31 @@ export async function getCryptoMeta(): Promise<CryptoMeta | undefined> {
 
 export async function setCryptoMeta(meta: CryptoMeta): Promise<void> {
   await rawPut(S_KV, "cryptoMeta", meta);
+}
+
+export async function deleteCryptoMeta(): Promise<void> {
+  await rawDelete(S_KV, "cryptoMeta");
+}
+
+/**
+ * One-time migration from a legacy password-protected vault: re-encrypt every
+ * record under the automatic key, then drop the legacy crypto metadata.
+ */
+export async function migrateFromLegacyVault(oldKey: CryptoKey): Promise<void> {
+  const newKey = await requireKey();
+  for (const store of [S_PROFILE, S_COUNTRY, S_RESUME_META, S_ANSWERS, S_APPS, S_SECURE]) {
+    const entries = await rawEntries<EncryptedBox>(store);
+    for (const [id, box] of entries) {
+      const value = await decryptJson<unknown>(box, oldKey);
+      await rawPut(store, id, await encryptJson(value, newKey));
+    }
+  }
+  const files = await rawEntries<EncryptedBox>(S_FILES);
+  for (const [id, box] of files) {
+    const bytes = await decryptBytes(box, oldKey);
+    await rawPut(S_FILES, id, await encryptBytes(bytes, newKey));
+  }
+  await deleteCryptoMeta();
 }
 
 export interface Settings {
@@ -225,6 +251,17 @@ export async function saveApplication(rec: ApplicationRecord): Promise<void> {
 
 export async function deleteApplication(id: string): Promise<void> {
   await rawDelete(S_APPS, id);
+}
+
+// ---- AI config (encrypted: contains the API key) ----
+
+export async function getAiConfig(): Promise<AiConfig> {
+  return (await getEnc<AiConfig>(S_SECURE, "aiConfig")) ?? defaultAiConfig();
+}
+
+export async function saveAiConfig(cfg: AiConfig): Promise<void> {
+  cfg.updatedAt = Date.now();
+  await putEnc(S_SECURE, "aiConfig", cfg);
 }
 
 // ---- backup ----
