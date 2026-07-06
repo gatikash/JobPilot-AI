@@ -1,18 +1,14 @@
-// Resizes the approved JobPilot AI source icon into Chrome extension sizes.
-// Source of truth: assets/jobpilot-ai-icon.png
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { deflateSync, inflateSync } from "node:zlib";
-
-const SOURCE = "assets/jobpilot-ai-icon.png";
-const SIZES = [16, 32, 48, 128];
+// Generates JobPilot AI search/profile PNG icons in Chrome extension sizes.
+// Pure zlib + PNG chunk writing so icon generation works anywhere Node works.
+import { deflateSync } from "node:zlib";
+import { writeFileSync, mkdirSync } from "node:fs";
 
 function crc32(buf) {
   let table = crc32.table;
   if (!table) {
     table = crc32.table = new Int32Array(256).map((_, n) => {
       let c = n;
-      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
       return c;
     });
   }
@@ -30,138 +26,20 @@ function chunk(type, data) {
   return Buffer.concat([len, body, crc]);
 }
 
-function paeth(a, b, c) {
-  const p = a + b - c;
-  const pa = Math.abs(p - a);
-  const pb = Math.abs(p - b);
-  const pc = Math.abs(p - c);
-  return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
-}
-
-function decodePng(file) {
-  const buf = readFileSync(file);
-  const signature = "89504e470d0a1a0a";
-  if (buf.subarray(0, 8).toString("hex") !== signature) {
-    throw new Error(`${file} is not a PNG file.`);
-  }
-
-  let width = 0;
-  let height = 0;
-  let bitDepth = 0;
-  let colorType = 0;
-  const idat = [];
-  for (let offset = 8; offset < buf.length;) {
-    const length = buf.readUInt32BE(offset);
-    const type = buf.subarray(offset + 4, offset + 8).toString("ascii");
-    const data = buf.subarray(offset + 8, offset + 8 + length);
-    offset += 12 + length;
-
-    if (type === "IHDR") {
-      width = data.readUInt32BE(0);
-      height = data.readUInt32BE(4);
-      bitDepth = data[8];
-      colorType = data[9];
-      if (data[10] !== 0 || data[11] !== 0 || data[12] !== 0) {
-        throw new Error("Unsupported PNG compression/filter/interlace mode.");
-      }
-    } else if (type === "IDAT") {
-      idat.push(data);
-    } else if (type === "IEND") {
-      break;
-    }
-  }
-
-  if (bitDepth !== 8 || ![2, 6].includes(colorType)) {
-    throw new Error("Icon source must be an 8-bit RGB or RGBA PNG.");
-  }
-
-  const channels = colorType === 6 ? 4 : 3;
-  const stride = width * channels;
-  const inflated = inflateSync(Buffer.concat(idat));
-  const raw = Buffer.alloc(width * height * channels);
-
-  let input = 0;
-  for (let y = 0; y < height; y += 1) {
-    const filter = inflated[input++];
-    const row = y * stride;
-    const prev = y > 0 ? row - stride : -1;
-    for (let x = 0; x < stride; x += 1) {
-      const left = x >= channels ? raw[row + x - channels] : 0;
-      const up = prev >= 0 ? raw[prev + x] : 0;
-      const upLeft = prev >= 0 && x >= channels ? raw[prev + x - channels] : 0;
-      const value = inflated[input++];
-      raw[row + x] = (value + (
-        filter === 0 ? 0 :
-        filter === 1 ? left :
-        filter === 2 ? up :
-        filter === 3 ? Math.floor((left + up) / 2) :
-        filter === 4 ? paeth(left, up, upLeft) :
-        0
-      )) & 0xff;
-    }
-  }
-
-  const rgba = Buffer.alloc(width * height * 4);
-  for (let i = 0, j = 0; i < raw.length; i += channels, j += 4) {
-    rgba[j] = raw[i];
-    rgba[j + 1] = raw[i + 1];
-    rgba[j + 2] = raw[i + 2];
-    rgba[j + 3] = channels === 4 ? raw[i + 3] : 255;
-  }
-  return { width, height, rgba };
-}
-
-function sample(src, x, y) {
-  x = Math.max(0, Math.min(src.width - 1, x));
-  y = Math.max(0, Math.min(src.height - 1, y));
-  const i = (Math.floor(y) * src.width + Math.floor(x)) * 4;
-  return [src.rgba[i], src.rgba[i + 1], src.rgba[i + 2], src.rgba[i + 3]];
-}
-
-function resizeContain(src, size) {
-  const out = Buffer.alloc(size * size * 4);
-  const scale = Math.min(size / src.width, size / src.height);
-  const drawW = src.width * scale;
-  const drawH = src.height * scale;
-  const offsetX = (size - drawW) / 2;
-  const offsetY = (size - drawH) / 2;
-
+function png(size, pixelFn) {
+  const raw = Buffer.alloc(size * (size * 4 + 1));
   for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const sx = (x + 0.5 - offsetX) / scale - 0.5;
-      const sy = (y + 0.5 - offsetY) / scale - 0.5;
-      const o = (y * size + x) * 4;
-      if (sx < 0 || sy < 0 || sx >= src.width || sy >= src.height) {
-        out[o] = 0; out[o + 1] = 0; out[o + 2] = 0; out[o + 3] = 0;
-        continue;
-      }
-      const x0 = Math.floor(sx), y0 = Math.floor(sy);
-      const x1 = x0 + 1, y1 = y0 + 1;
-      const tx = sx - x0, ty = sy - y0;
-      const c00 = sample(src, x0, y0);
-      const c10 = sample(src, x1, y0);
-      const c01 = sample(src, x0, y1);
-      const c11 = sample(src, x1, y1);
-      for (let c = 0; c < 4; c += 1) {
-        const top = c00[c] * (1 - tx) + c10[c] * tx;
-        const bottom = c01[c] * (1 - tx) + c11[c] * tx;
-        out[o + c] = Math.round(top * (1 - ty) + bottom * ty);
-      }
-    }
-  }
-  return out;
-}
-
-function encodePng(width, height, rgba) {
-  const raw = Buffer.alloc(height * (width * 4 + 1));
-  for (let y = 0; y < height; y += 1) {
-    const row = y * (width * 4 + 1);
+    const row = y * (size * 4 + 1);
     raw[row] = 0;
-    rgba.copy(raw, row + 1, y * width * 4, (y + 1) * width * 4);
+    for (let x = 0; x < size; x += 1) {
+      const [r, g, b, a] = pixelFn(x, y, size);
+      const o = row + 1 + x * 4;
+      raw[o] = r; raw[o + 1] = g; raw[o + 2] = b; raw[o + 3] = a;
+    }
   }
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
   ihdr[8] = 8;
   ihdr[9] = 6;
   return Buffer.concat([
@@ -172,16 +50,128 @@ function encodePng(width, height, rgba) {
   ]);
 }
 
-if (!existsSync(SOURCE)) {
-  console.error(`Missing ${SOURCE}. Save the approved source PNG there, then run npm run icons.`);
-  process.exit(1);
+function clamp(v, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function mix(a, b, t) {
+  return Math.round(a + (b - a) * t);
+}
+
+function over(bottom, top) {
+  const ta = top[3] / 255;
+  const ba = bottom[3] / 255;
+  const oa = ta + ba * (1 - ta);
+  if (oa <= 0) return [0, 0, 0, 0];
+  return [
+    Math.round((top[0] * ta + bottom[0] * ba * (1 - ta)) / oa),
+    Math.round((top[1] * ta + bottom[1] * ba * (1 - ta)) / oa),
+    Math.round((top[2] * ta + bottom[2] * ba * (1 - ta)) / oa),
+    Math.round(oa * 255),
+  ];
+}
+
+function roundedRect(px, py, x, y, w, h, r) {
+  const qx = Math.abs(px - (x + w / 2)) - (w / 2 - r);
+  const qy = Math.abs(py - (y + h / 2)) - (h / 2 - r);
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
+}
+
+function circle(px, py, cx, cy, r) {
+  return Math.hypot(px - cx, py - cy) - r;
+}
+
+function capsule(px, py, ax, ay, bx, by, r) {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const wx = px - ax;
+  const wy = py - ay;
+  const c = clamp((wx * vx + wy * vy) / (vx * vx + vy * vy));
+  return Math.hypot(px - (ax + vx * c), py - (ay + vy * c)) - r;
+}
+
+function polygon(px, py, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i, i += 1) {
+    const xi = pts[i][0], yi = pts[i][1];
+    const xj = pts[j][0], yj = pts[j][1];
+    const hit = ((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
+    if (hit) inside = !inside;
+  }
+  return inside;
+}
+
+function alphaFromDistance(d) {
+  return Math.round(clamp(0.5 - d) * 255);
+}
+
+function teal(u, v, alpha = 255) {
+  const t = clamp((u * 0.45 + v * 0.75) / 1.2);
+  return [mix(18, 0, t), mix(210, 145, t), mix(164, 132, t), alpha];
+}
+
+function iconPixel(x, y, s) {
+  const samples = 3;
+  let color = [0, 0, 0, 0];
+
+  for (let sy = 0; sy < samples; sy += 1) {
+    for (let sx = 0; sx < samples; sx += 1) {
+      const u = (x + (sx + 0.5) / samples) / s;
+      const v = (y + (sy + 0.5) / samples) / s;
+      let c = [0, 0, 0, 0];
+
+      const tile = roundedRect(u, v, 0.055, 0.055, 0.89, 0.89, 0.19);
+      if (tile <= 0) {
+        const shade = clamp(v * 1.15);
+        c = over(c, [mix(255, 230, shade), mix(255, 252, shade), mix(255, 248, shade), 255]);
+        const mintGlow = clamp(1 - Math.hypot(u - 0.55, v - 0.8) / 0.52);
+        c = over(c, [196, 248, 235, Math.round(mintGlow * 90)]);
+      }
+
+      const shadowTile = roundedRect(u, v, 0.055, 0.055, 0.89, 0.89, 0.19);
+      if (shadowTile > 0 && shadowTile < 0.035) {
+        c = over(c, [28, 157, 139, Math.round((0.035 - shadowTile) * 1300)]);
+      }
+
+      const cx = 0.445;
+      const cy = 0.46;
+      const ringOuter = circle(u, v, cx, cy, 0.285);
+      const ringInner = circle(u, v, cx, cy, 0.221);
+      if (ringOuter <= 0 && ringInner >= 0) {
+        c = over(c, teal(u, v, alphaFromDistance(Math.max(ringOuter, -ringInner) * s)));
+      }
+
+      const handle = capsule(u, v, 0.64, 0.65, 0.805, 0.815, 0.052);
+      if (handle <= 0) c = over(c, teal(u, v, alphaFromDistance(handle * s)));
+
+      const head = circle(u, v, cx, cy - 0.055, 0.059);
+      if (head <= 0) c = over(c, teal(u, v, alphaFromDistance(head * s)));
+
+      const body = capsule(u, v, cx - 0.087, cy + 0.104, cx + 0.087, cy + 0.104, 0.071);
+      const bodyMask = v >= cy + 0.02 && v <= cy + 0.16 && body <= 0;
+      if (bodyMask) c = over(c, teal(u, v, alphaFromDistance(body * s)));
+
+      const sparkle = polygon(u, v, [
+        [0.715, 0.183],
+        [0.742, 0.247],
+        [0.81, 0.274],
+        [0.742, 0.3],
+        [0.715, 0.367],
+        [0.688, 0.3],
+        [0.62, 0.274],
+        [0.688, 0.247],
+      ]);
+      if (sparkle) c = over(c, teal(u, v, 245));
+
+      color = over(color, [c[0], c[1], c[2], Math.round(c[3] / (samples * samples))]);
+    }
+  }
+
+  return color;
 }
 
 mkdirSync("icons", { recursive: true });
-const src = decodePng(SOURCE);
-for (const size of SIZES) {
-  const target = `icons/icon${size}.png`;
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, encodePng(size, size, resizeContain(src, size)));
-  console.log(target);
+for (const size of [16, 32, 48, 128]) {
+  writeFileSync(`icons/icon${size}.png`, png(size, iconPixel));
+  console.log(`icons/icon${size}.png`);
 }
