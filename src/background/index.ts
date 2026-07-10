@@ -69,6 +69,21 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   void chrome.storage.session.remove(`tab:${tabId}`);
 });
 
+/** Number of currently-connected side-panel ports. Chrome does not expose an
+ * "is side panel open" API, so the sidepanel opens a long-lived port on load
+ * and this counter tracks live connections. Non-zero = at least one panel
+ * open; zero = user closed every panel. Content scripts consult this value
+ * via the `isSidePanelOpen` message before auto-filling modal mutations. */
+let sidePanelPortCount = 0;
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "sidepanel") return;
+  sidePanelPortCount += 1;
+  port.onDisconnect.addListener(() => {
+    sidePanelPortCount = Math.max(0, sidePanelPortCount - 1);
+  });
+});
+
 // ---------- merged fill report ----------
 
 function mergedReport(state: TabState): FillReport | undefined {
@@ -1176,6 +1191,9 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
       void autoAnalyzeTab(tab.id, tab.url);
       return { ok: true };
     }
+
+    case "isSidePanelOpen":
+      return { ok: true, open: sidePanelPortCount > 0 };
 
     case "getSidePanelModel": {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

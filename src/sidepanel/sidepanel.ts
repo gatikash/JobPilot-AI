@@ -553,5 +553,12 @@ chrome.runtime.onMessage.addListener((msg) => {
 // refresh when the user switches tabs
 chrome.tabs.onActivated.addListener(() => void refresh());
 
+// Long-lived port so the background service worker can tell when the side
+// panel closes. When the panel is closed the port disconnects; the content
+// script uses that signal to stop autofilling on modal mutations.
+const keepAlivePort = chrome.runtime.connect({ name: "sidepanel" });
+// Keep the reference alive across the module lifetime; nothing to send.
+void keepAlivePort;
+
 initStaticTips();
 void refresh();

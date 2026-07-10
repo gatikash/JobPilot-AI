@@ -648,12 +648,32 @@ function armModalWatch(): void {
       // how noisy the page's mutations are
       const now = Date.now();
       if (now - lastFillAt < 1200) return;
-      lastFillAt = now;
-      const { applicationId, ctx } = cachedFillCtx;
-      void fillPage(applicationId, ctx).catch(() => undefined);
+      // Autofill on modal mutations is opt-in via the side panel: if the
+      // user closed the panel we treat it as "stop touching my forms" and
+      // wait for an explicit Scan & fill / Start Assist click instead.
+      void (async () => {
+        const open = await isSidePanelOpen();
+        if (!open) return;
+        if (!cachedFillCtx) return;
+        lastFillAt = Date.now();
+        const { applicationId, ctx } = cachedFillCtx;
+        void fillPage(applicationId, ctx).catch(() => undefined);
+      })();
     }, 600);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+/** Ask the background service worker whether at least one side panel is
+ * currently open. Returns false on any error so the safe default is "do
+ * not autofill". */
+async function isSidePanelOpen(): Promise<boolean> {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "isSidePanelOpen" });
+    return !!res?.open;
+  } catch {
+    return false;
+  }
 }
 
 /** Cheap pre-filter over MutationObserver records so we only pay for a full

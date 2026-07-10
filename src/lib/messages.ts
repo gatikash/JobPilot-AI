@@ -44,7 +44,10 @@ export type BgRequest =
   /** generate resume tailoring suggestions for the active job/resume */
   | { type: "requestTailoring"; force?: boolean }
   /** save/bookmark the active job without starting a fill pass */
-  | { type: "saveJobForLater" };
+  | { type: "saveJobForLater" }
+  /** content script asks whether the side panel is currently open;
+   * used to gate automatic re-fills on modal mutations */
+  | { type: "isSidePanelOpen" };
 
 // background -> content
 export type ContentCommand =
