@@ -593,14 +593,6 @@ function armLoginWatch(): void {
 async function startAssist(): Promise<{ applicationId?: string; job: JobInfo }> {
   const { applicationId, job } = await analyzeAndReport();
 
-  // LinkedIn is analyze/match only - never fill or touch its forms
-  // (account-risk line from the PRD stays intact)
-  if (job.portal === "linkedin") {
-    void chrome.runtime.sendMessage({ type: "requestMatch" }).catch(() => undefined);
-    toast("LinkedIn is match-only: check the side panel for your profile match. JobPilot AI never fills or automates LinkedIn.");
-    return { applicationId, job };
-  }
-
   const res = await chrome.runtime.sendMessage({
     type: "getFillContext",
     countryCode: job.countryCode,
@@ -612,8 +604,86 @@ async function startAssist(): Promise<{ applicationId?: string; job: JobInfo }> 
     toast(res?.error ?? "JobPilot AI could not start.");
     return { applicationId, job };
   }
-  await fillPage(applicationId ?? "", res.ctx as FillContext);
+  const ctx = res.ctx as FillContext;
+  cachedFillCtx = { applicationId: applicationId ?? "", ctx };
+  await fillPage(applicationId ?? "", ctx);
+
+  // Many portals (LinkedIn Easy Apply, Lever quick-apply, Workday intake,
+  // Greenhouse "Apply for this job") open the actual form inside a modal
+  // that mounts *after* startAssist finishes, or swap the modal's contents
+  // when the user hits Next. Watch for those and re-run the fill on the
+  // freshly-mounted subtree so multi-step modals get the same treatment as
+  // a plain page.
+  armModalWatch();
+
+  if (job.portal === "linkedin") {
+    toast("Easy Apply detected - review each step before clicking Next; JobPilot AI never clicks Submit for you.");
+  }
   return { applicationId, job };
+}
+
+/** Cached fill context so modal re-scans do not have to round-trip through
+ * the background service worker for every mutation burst. Refreshed on each
+ * startAssist. */
+let cachedFillCtx: { applicationId: string; ctx: FillContext } | undefined;
+
+let modalWatchArmed = false;
+
+/** Watch for application modals mounting after startAssist and re-run the
+ * fill inside them. Debounced so a mutation storm from an SPA route only
+ * triggers one fill pass. */
+function armModalWatch(): void {
+  if (modalWatchArmed) return;
+  modalWatchArmed = true;
+
+  let timer: number | undefined;
+  let lastFillAt = 0;
+  const observer = new MutationObserver((records) => {
+    if (!cachedFillCtx) return;
+    if (!recordsLookLikeModalOrForm(records)) return;
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      if (!cachedFillCtx) return;
+      // rate-limit: never re-fill more than once every ~1.2s regardless of
+      // how noisy the page's mutations are
+      const now = Date.now();
+      if (now - lastFillAt < 1200) return;
+      lastFillAt = now;
+      const { applicationId, ctx } = cachedFillCtx;
+      void fillPage(applicationId, ctx).catch(() => undefined);
+    }, 600);
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+/** Cheap pre-filter over MutationObserver records so we only pay for a full
+ * fillPage when something that could reasonably be an application form
+ * showed up (dialog element, aria-modal container, or a subtree containing
+ * form controls). */
+function recordsLookLikeModalOrForm(records: MutationRecord[]): boolean {
+  const modalSelector = [
+    "dialog",
+    "[role='dialog']",
+    "[aria-modal='true']",
+    ".artdeco-modal",                    // LinkedIn Easy Apply shell
+    ".jobs-easy-apply-modal",            // LinkedIn Easy Apply modal
+    ".jobs-easy-apply-content",          // LinkedIn Easy Apply step body
+    ".modal",
+    ".modal-dialog",
+    ".ReactModal__Content",
+  ].join(",");
+
+  for (const rec of records) {
+    for (const node of Array.from(rec.addedNodes)) {
+      if (!(node instanceof HTMLElement)) continue;
+      if (node.matches?.(modalSelector) || node.querySelector?.(modalSelector)) return true;
+      // Fallback: a subtree with several fillable controls almost certainly
+      // is the next Easy Apply step or a mid-flight form injection.
+      const controls = node.querySelectorAll?.("input, textarea, select");
+      if (controls && controls.length >= 3) return true;
+    }
+  }
+  return false;
 }
 
 const fieldRegistry = new Map<string, HTMLElement>();

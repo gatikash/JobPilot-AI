@@ -133,7 +133,8 @@ The extension is designed around one rule: **it assists, but it does not submit 
 
 - Tracks and matches LinkedIn jobs.
 - Keeps save-for-later and manual status tracking for LinkedIn.
-- Does not auto-fill LinkedIn forms.
+- Fills known fields inside the LinkedIn **Easy Apply** modal on each step (contact details, work-experience blocks, and safe questions) using the same rules that apply to Greenhouse and Lever.
+- Does not click **Next**, **Review**, or **Submit application** inside Easy Apply - the user always confirms each step manually.
 - Does not auto-detect LinkedIn completion as applied.
 - Requires the user to mark LinkedIn jobs as applied manually from the side panel or history page.
 - Handles LinkedIn single-page navigation by detecting when the active job changes.
@@ -158,11 +159,12 @@ Form filling is supported for:
 - Greenhouse
 - Lever
 - Workday basic assist
+- LinkedIn Easy Apply modal (step-by-step, without ever clicking Next / Submit)
 - Generic company career pages
 
 Read-only matching and tracking are supported for:
 
-- LinkedIn Jobs
+- LinkedIn Jobs (regular apply-off-site postings)
 
 ## Recommended UX Flow
 
