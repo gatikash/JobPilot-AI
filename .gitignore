@@ -10,3 +10,10 @@ dist/
 # OS junk
 Thumbs.db
 .DS_Store
+
+# packaged artifacts (built locally, not versioned)
+*.zip
+*.vsix
+
+# local screenshots / scratch
+SS/

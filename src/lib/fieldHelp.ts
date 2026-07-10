@@ -71,7 +71,7 @@ export const FIELD_HELP: Record<string, string> = {
 
   // ---- AI matching ----
   "ai-provider": "Which AI service scores your job matches. OpenRouter is the easiest: one key gives access to every cheap model. 'Custom' works with any OpenAI-compatible endpoint, such as Groq, Together, or local Ollama.",
-  "ai-model": "Model used for scoring. Cheap, fast models are enough for this task because matching is classification, not writing. Examples: google/gemini-2.0-flash-lite-001 (OpenRouter), gpt-4o-mini (OpenAI), claude-haiku-4-5-20251001 (Anthropic).",
+  "ai-model": "Model used for scoring. Cheap, fast models are enough for this task because matching is classification, not writing. Examples: gemini-3.1-flash-lite (Google), google/gemini-2.0-flash-lite-001 (OpenRouter), gpt-4o-mini (OpenAI), claude-haiku-4-5-20251001 (Anthropic).",
   "ai-baseurl": "API endpoint base URL. Prefilled per provider; only change it for custom/self-hosted endpoints. JobPilot AI requests permission to call this host when you save.",
   "ai-key": "Your API key for the provider. Stored AES-encrypted in the vault, sent only to the base URL above, never anywhere else.",
   "ai-enabled": "Master switch. Off = matching still works with the free offline keyword estimate; on = job description + resume text are sent to your AI provider for semantic scoring.",

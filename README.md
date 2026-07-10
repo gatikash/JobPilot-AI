@@ -10,6 +10,35 @@ JobPilot AI helps you move through job applications faster without giving up con
 
 The extension is designed around one rule: **it assists, but it does not submit applications for you.**
 
+## Screenshots
+
+### Side panel — job details, country, portal, and recommended resume
+![Job details in the side panel](docs/screenshots/01_job_details_generic.png)
+
+### Side panel — match score, per-resume bars, missing skills
+![Match score view](docs/screenshots/02_match_score_generic.png)
+
+### Extension popup — quick status and side panel launcher
+![Extension popup](docs/screenshots/03_extension_popup_generic.png)
+
+### Settings — profile
+![Profile settings](docs/screenshots/04_profile_generic.png)
+
+### Settings — countries and visa
+![Countries and visa settings](docs/screenshots/05_countries_visa_generic.png)
+
+### Settings — resumes
+![Resume management](docs/screenshots/06_resumes_generic.png)
+
+### Settings — AI matching provider
+![AI matching configuration](docs/screenshots/07_ai_matching_generic.png)
+
+### Settings — application history (Jira-style board and grid view)
+![Application history](docs/screenshots/08_history_generic.png)
+
+### LinkedIn side-panel view
+![LinkedIn side panel](docs/screenshots/09_linkedin_side_panel_generic.png)
+
 ## What It Does
 
 ### Application Assist
@@ -193,7 +222,7 @@ Configure these tabs:
 - **Countries & Visa**: work authorization, sponsorship, notice period, salary, visa type, and relocation by country.
 - **Resumes**: upload resumes, map them to countries, choose a default resume, and review extracted match text.
 - **Saved Answers**: review answers collected while applying.
-- **AI Matching**: connect OpenRouter, OpenAI, Anthropic, or a custom OpenAI-compatible provider.
+- **AI Matching**: connect OpenRouter, Google Gemini, OpenAI, Anthropic, or a custom OpenAI-compatible provider.
 - **History**: track applications in board or grid view.
 - **Backup & Settings**: export or import encrypted backups.
 
@@ -204,6 +233,7 @@ OpenRouter is the easiest provider because one key can access many models.
 Suggested low-cost model choices:
 
 - `google/gemini-2.0-flash-lite-001`
+- `gemini-3.1-flash-lite` on Google Gemini
 - `deepseek/deepseek-chat`
 - `gpt-4o-mini`
 - `claude-haiku-4-5-20251001`

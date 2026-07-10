@@ -11,7 +11,11 @@ let tailoringCollapsed = false;
 
 async function refresh(): Promise<void> {
   const res = await chrome.runtime.sendMessage({ type: "getSidePanelModel" }).catch(() => undefined);
-  if (!res?.ok) return;
+  if (!res?.ok) {
+    $("panel-loading").classList.add("hidden");
+    $("no-job").classList.remove("hidden");
+    return;
+  }
   current = res.model as SidePanelModel;
   render();
 }
@@ -19,6 +23,17 @@ async function refresh(): Promise<void> {
 function render(): void {
   const m = current;
   if (!m) return;
+
+  const loading = !!m.analyzing;
+  $("panel-loading").classList.toggle("hidden", !loading);
+  if (loading) {
+    // hide all job data while a fresh analysis is pending: no stale content
+    for (const id of ["no-job", "job-card", "match-card", "likely-applied", "fill-summary", "missing-section", "next-hint"]) {
+      $(id).classList.add("hidden");
+    }
+    $("warnings").innerHTML = "";
+    return;
+  }
 
   const hasJob = !!m.job;
   $("no-job").classList.toggle("hidden", hasJob);
@@ -149,15 +164,18 @@ function renderMatch(m: SidePanelModel): void {
   tailorBtn.textContent = m.tailoringPending ? "Tailoring..." : (m.tailoring ? "Refresh tailoring" : "Tailor resume");
 
   if (!m.match) {
-    overall.textContent = "-";
+    overall.textContent = m.matchPending ? "…" : "-";
     overall.className = "score-value";
     const ring = overall.closest<HTMLElement>(".score-ring");
-    if (ring) ring.style.background = "";
+    if (ring) {
+      ring.style.background = "";
+      ring.classList.toggle("is-loading", !!m.matchPending);
+    }
     profiles.innerHTML = "";
     missing.innerHTML = "";
     recommend.textContent = "";
-    status.textContent = m.matchPending
-      ? "Asking your AI model..."
+    status.innerHTML = m.matchPending
+      ? `<span class="tailor-spinner" aria-hidden="true" style="margin-right:6px;vertical-align:-2px;"></span>Analysing match score, please wait…`
       : (m.aiConfigured
         ? "Click Match to score this job against your resumes."
         : "Tip: configure AI Matching in Settings for semantic scores. Without it you get a free keyword estimate.");
@@ -174,14 +192,17 @@ function renderMatch(m: SidePanelModel): void {
   if (ring) {
     ring.style.background =
       `radial-gradient(circle at center, #fff 0 55%, transparent 56%), conic-gradient(${scoreColor} 0 ${r.overall}%, #e5edf7 ${r.overall}% 100%)`;
+    ring.classList.toggle("is-loading", !!m.matchPending);
   }
 
-  status.textContent = m.matchPending
-    ? "Keyword estimate shown - AI score on the way..."
-    : r.source === "ai"
+  if (m.matchPending) {
+    status.innerHTML = `<span class="tailor-spinner" aria-hidden="true" style="margin-right:6px;vertical-align:-2px;"></span>Refining match score with AI…`;
+  } else {
+    status.textContent = r.source === "ai"
       ? `AI score (${r.model ?? "model"})`
       : "Keyword estimate" + (m.aiConfigured ? "" : " - add an AI key in Settings for smarter scoring");
-  if (r.error) status.textContent = r.error;
+  }
+  if (r.error && !m.matchPending) status.textContent = r.error;
 
   profiles.innerHTML = "";
   for (const p of r.profiles) {
@@ -473,7 +494,7 @@ $("btn-analyze-profile").addEventListener("click", async () => {
     const warnings = Array.isArray(res.warnings) ? res.warnings.filter(Boolean) : [];
     summary.textContent = warnings.length
       ? `Analysis complete. ${warnings.join(" ")}`
-      : "Analysis complete. Match score and tailoring are updated below.";
+      : "Analysis complete. Match score is updated below.";
   } else {
     summary.textContent = res?.error ?? "Could not analyze this page.";
   }

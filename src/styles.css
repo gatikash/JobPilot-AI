@@ -415,6 +415,7 @@ tr:hover td { background: #f9fbff; }
 }
 
 .score-ring {
+  position: relative;
   width: 88px;
   height: 88px;
   border-radius: 50%;
@@ -428,6 +429,19 @@ tr:hover td { background: #f9fbff; }
   border: 1px solid var(--border);
   box-shadow: inset 0 0 0 6px #fff, var(--shadow-soft);
 }
+
+.score-spinner {
+  display: none;
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  width: 14px;
+  height: 14px;
+}
+
+.score-ring.is-loading { background: #f1f5f9 !important; }
+.score-ring.is-loading .score-value { color: var(--muted); }
+.score-ring.is-loading .score-spinner { display: inline-block; }
 
 .score-value {
   font-size: 22px;

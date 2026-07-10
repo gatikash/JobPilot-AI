@@ -41,7 +41,39 @@ export interface UserProfile {
   otherProfileUrl: string;
   // free-form extras
   coverLetterText: string;
+  /** Past organizations for multi-instance work-experience forms (Workday etc.). */
+  workExperience: WorkExperienceEntry[];
   updatedAt: number;
+}
+
+export interface WorkExperienceEntry {
+  id: string;
+  jobTitle: string;
+  company: string;
+  location: string;
+  currentlyWorking: boolean;
+  /** "01".."12" */
+  startMonth: string;
+  /** "YYYY" */
+  startYear: string;
+  endMonth: string;
+  endYear: string;
+  description: string;
+}
+
+export function emptyWorkExperience(): WorkExperienceEntry {
+  return {
+    id: "",
+    jobTitle: "",
+    company: "",
+    location: "",
+    currentlyWorking: false,
+    startMonth: "",
+    startYear: "",
+    endMonth: "",
+    endYear: "",
+    description: "",
+  };
 }
 
 export interface CountryProfile {
@@ -163,7 +195,7 @@ export interface JobInfo {
 
 // ---- AI matching ----
 
-export type AiProvider = "openrouter" | "openai" | "anthropic" | "custom";
+export type AiProvider = "openrouter" | "openai" | "anthropic" | "google" | "custom";
 
 export interface AiConfig {
   enabled: boolean;
@@ -191,8 +223,30 @@ export const AI_PROVIDER_PRESETS: Record<AiProvider, { baseUrl: string; modelHin
   openrouter: { baseUrl: "https://openrouter.ai/api/v1", modelHint: "google/gemini-2.0-flash-lite-001" },
   openai: { baseUrl: "https://api.openai.com/v1", modelHint: "gpt-4o-mini" },
   anthropic: { baseUrl: "https://api.anthropic.com", modelHint: "claude-haiku-4-5-20251001" },
+  google: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", modelHint: "gemini-3.1-flash-lite" },
   custom: { baseUrl: "", modelHint: "model-name" },
 };
+
+/** Google's endpoint and default model are fixed per the Gemini API docs, so a
+ * pasted API key is enough — fill anything the user left blank. */
+export function normalizeAiConfig(cfg: AiConfig): AiConfig {
+  if (cfg.provider === "google") {
+    const preset = AI_PROVIDER_PRESETS.google;
+    cfg.baseUrl = preset.baseUrl;
+    if (shouldUseGoogleDefaultModel(cfg.model)) cfg.model = preset.modelHint;
+  }
+  return cfg;
+}
+
+export function shouldUseGoogleDefaultModel(model: string): boolean {
+  const raw = model.trim();
+  if (!raw) return true;
+  return raw === "gemini-flash-lite-latest"
+    || raw === "gemini-2.0-flash-lite"
+    || raw === "gemini-2.0-flash-lite-001"
+    || raw === "google/gemini-2.0-flash-lite-001"
+    || raw.startsWith("google/");
+}
 
 export interface ProfileMatch {
   name: string;      // resume/profile name
@@ -300,6 +354,7 @@ export function emptyProfile(): UserProfile {
     graduationYear: "", gpa: "",
     linkedinUrl: "", githubUrl: "", portfolioUrl: "", personalWebsite: "",
     otherProfileUrl: "", coverLetterText: "",
+    workExperience: [],
     updatedAt: 0,
   };
 }

@@ -7,6 +7,7 @@
   <style>
     body { padding: 14px; min-width: 300px; }
     #no-job { padding: 14px; }
+    .panel-loading { display: flex; align-items: center; gap: 8px; padding: 14px; }
     .job-actions { margin-top: 12px; }
     .job-actions button { width: 100%; }
     .panel-footer {
@@ -34,7 +35,12 @@
     </div>
   </div>
 
-  <div id="no-job" class="card muted">No job page analyzed yet. Open a job posting and click <b>Start Assist</b> in the popup.</div>
+  <div id="panel-loading" class="card muted panel-loading">
+    <span class="tailor-spinner" aria-hidden="true"></span>
+    <span>Analysing profile, please wait...</span>
+  </div>
+
+  <div id="no-job" class="card muted hidden">No job detected on this tab. Open a job posting — JobPilot analyzes it automatically. If nothing shows up, click <b>Analyze profile</b> below.</div>
 
   <div id="job-card" class="card hidden">
     <div class="kv"><span>Job</span><span id="j-title">-</span></div>
@@ -52,9 +58,10 @@
 
   <div id="match-card" class="card match-shell hidden">
     <div class="match-hero">
-      <div class="score-ring">
+      <div class="score-ring" id="match-ring">
         <div id="match-overall" class="score-value">-</div>
         <div class="score-label">Score</div>
+        <span class="score-spinner tailor-spinner" aria-hidden="true"></span>
       </div>
       <div>
         <div class="match-title">

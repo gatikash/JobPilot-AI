@@ -3,6 +3,7 @@
 import {
   ApplicationRecord, ApplicationStatus, DraftAnswerResult, FillReport, JobInfo,
   LikelyAppliedSignal, MatchResult, MissingField, AnswerScope, ResumeTailoringResult,
+  WorkExperienceEntry,
 } from "./types";
 
 /** Data bundle the content script needs to fill a page. Sent by background. */
@@ -11,11 +12,14 @@ export interface FillContext {
   countryCode: string;
   savedAnswers: { questionNormalized: string; answer: string; rank: number }[];
   resume?: { name: string; fileName: string; mime: string; dataB64: string };
+  workExperience: WorkExperienceEntry[];
 }
 
 // content/UI -> background
 export type BgRequest =
   | { type: "pageAnalyzed"; job: JobInfo }
+  /** SPA navigation started; jobChanged = URL clearly points at another job */
+  | { type: "pageChanging"; jobChanged?: boolean }
   | { type: "getFillContext"; countryCode: string; portal: string; company: string }
   | { type: "fillReport"; applicationId: string; report: FillReport }
   | { type: "likelyApplied"; signal: LikelyAppliedSignal }
@@ -26,6 +30,9 @@ export type BgRequest =
   | { type: "startAssistOnActiveTab" }
   /** analyze the active job and run matching/tailoring without filling form fields */
   | { type: "analyzeActiveJob" }
+  /** force a fresh analysis of the active tab against its current URL
+   * (used when the side panel is opened so it never shows a stale job) */
+  | { type: "resyncActiveTab" }
   | { type: "getSidePanelModel" }
   | { type: "markSubmitted"; applicationId?: string }
   | { type: "dismissField"; applicationId: string; fieldId: string; question: string }
@@ -43,6 +50,8 @@ export type BgRequest =
 export type ContentCommand =
   | { type: "startAssist" }
   | { type: "analyzePage" }
+  /** return the page's visible text for AI-based job extraction */
+  | { type: "getPageText" }
   | { type: "fillWithContext"; applicationId: string; ctx: FillContext }
   | { type: "fillSingleField"; fieldId: string; answer: string }
   | { type: "unhighlightField"; fieldId: string }
@@ -64,6 +73,8 @@ export interface SidePanelModel {
   lastDraft?: DraftAnswerResult;
   likelyApplied?: LikelyAppliedSignal;
   aiConfigured?: boolean;
+  /** page navigated; a fresh job analysis has not arrived yet */
+  analyzing?: boolean;
 }
 
 export function normalizeQuestion(q: string): string {

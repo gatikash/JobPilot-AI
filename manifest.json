@@ -4,16 +4,11 @@
   "version": "0.5.0",
   "description": "AI-powered job application companion. Matches jobs to your resumes, fills known fields from your local profile, and always leaves the final Submit to you.",
   "minimum_chrome_version": "114",
-  "permissions": ["storage", "scripting", "activeTab", "sidePanel"],
+  "permissions": ["storage", "scripting", "activeTab", "sidePanel", "tabs"],
   "host_permissions": [
-    "https://boards.greenhouse.io/*",
-    "https://job-boards.greenhouse.io/*",
-    "https://jobs.lever.co/*",
-    "https://jobs.eu.lever.co/*",
-    "https://*.myworkdayjobs.com/*",
-    "https://www.linkedin.com/jobs/*"
+    "http://*/*",
+    "https://*/*"
   ],
-  "optional_host_permissions": ["https://*/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

@@ -11,8 +11,19 @@ import * as db from "../lib/db";
 import { aiMatch } from "../lib/matcher";
 import {
   AI_PROVIDER_PRESETS, AiProvider, ApplicationRecord, ApplicationStatus, COUNTRIES,
-  CountryProfile, ResumeMeta, UserProfile, emptyCountryProfile,
+  CountryProfile, ResumeMeta, UserProfile, WorkExperienceEntry, emptyCountryProfile,
+  emptyWorkExperience, normalizeAiConfig, shouldUseGoogleDefaultModel,
 } from "../lib/types";
+
+const MAX_WORK_EXPERIENCE = 4;
+const MONTH_OPTIONS: { value: string; label: string }[] = [
+  { value: "01", label: "January" }, { value: "02", label: "February" },
+  { value: "03", label: "March" },   { value: "04", label: "April" },
+  { value: "05", label: "May" },     { value: "06", label: "June" },
+  { value: "07", label: "July" },    { value: "08", label: "August" },
+  { value: "09", label: "September" },{ value: "10", label: "October" },
+  { value: "11", label: "November" },{ value: "12", label: "December" },
+];
 
 pdfjs.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("options/pdf.worker.min.mjs");
 
@@ -59,18 +70,145 @@ async function loadProfile(): Promise<void> {
   const profile = await db.getProfile();
   for (const el of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("[data-f]")) {
     const key = el.dataset.f as keyof UserProfile;
-    el.value = String(profile[key] ?? "");
+    const val = profile[key];
+    if (typeof val === "string") el.value = val;
   }
+  renderWorkExperienceList(profile.workExperience);
 }
 
 async function saveProfileFromForm(): Promise<void> {
   const profile = await db.getProfile();
   for (const el of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("[data-f]")) {
     const key = el.dataset.f as keyof UserProfile;
-    (profile as unknown as Record<string, unknown>)[key] = el.value.trim();
+    if (typeof profile[key] === "string") {
+      (profile as unknown as Record<string, unknown>)[key] = el.value.trim();
+    }
   }
+  profile.workExperience = readWorkExperienceFromForm();
   await db.saveProfile(profile);
   flash("profile-saved", "Saved.");
+}
+
+// ---------- work experience ----------
+
+function renderWorkExperienceList(entries: WorkExperienceEntry[]): void {
+  const list = $("work-experience-list");
+  list.innerHTML = "";
+  if (entries.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.style.margin = "8px 0";
+    empty.textContent = "No organizations added yet. Click Add organization below.";
+    list.appendChild(empty);
+  } else {
+    entries.forEach((e, i) => list.appendChild(buildWorkExperienceCard(e, i)));
+  }
+  updateAddWorkExpButton();
+}
+
+function buildWorkExperienceCard(entry: WorkExperienceEntry, index: number): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "work-exp-card";
+  card.dataset.workExpIdx = String(index);
+  card.innerHTML = `
+    <div class="work-exp-head">
+      <b>Organization ${index + 1}</b>
+      <button type="button" class="work-exp-remove secondary">Remove</button>
+    </div>
+    <div class="grid2">
+      <div><label>Job title</label><input data-w="jobTitle" placeholder="e.g. Senior .NET Developer" value="${escapeHtml(entry.jobTitle)}" /></div>
+      <div><label>Company</label><input data-w="company" placeholder="e.g. Acme Technologies" value="${escapeHtml(entry.company)}" /></div>
+      <div><label>Location</label><input data-w="location" placeholder="e.g. Bengaluru, India" value="${escapeHtml(entry.location)}" /></div>
+      <div>
+        <label>&nbsp;</label>
+        <label class="work-exp-current"><input type="checkbox" data-w="currentlyWorking" ${entry.currentlyWorking ? "checked" : ""} /> I currently work here</label>
+      </div>
+    </div>
+    <div class="work-exp-dates">
+      <div>
+        <label>From</label>
+        <div class="work-exp-date-pair">
+          ${monthSelectHtml("startMonth", entry.startMonth)}
+          <input data-w="startYear" placeholder="YYYY" maxlength="4" value="${escapeHtml(entry.startYear)}" />
+        </div>
+      </div>
+      <div>
+        <label>To</label>
+        <div class="work-exp-date-pair">
+          ${monthSelectHtml("endMonth", entry.endMonth, entry.currentlyWorking)}
+          <input data-w="endYear" placeholder="YYYY" maxlength="4" value="${escapeHtml(entry.endYear)}" ${entry.currentlyWorking ? "disabled" : ""} />
+        </div>
+      </div>
+    </div>
+    <label style="margin-top:8px;">Role description / responsibilities</label>
+    <textarea data-w="description" rows="3" placeholder="Bullet points or a short paragraph describing what you did.">${escapeHtml(entry.description)}</textarea>`;
+
+  card.querySelector<HTMLButtonElement>(".work-exp-remove")!.addEventListener("click", () => {
+    const entries = readWorkExperienceFromForm();
+    entries.splice(index, 1);
+    renderWorkExperienceList(entries);
+  });
+
+  const currentCheckbox = card.querySelector<HTMLInputElement>('input[data-w="currentlyWorking"]')!;
+  currentCheckbox.addEventListener("change", () => {
+    const endMonth = card.querySelector<HTMLSelectElement>('select[data-w="endMonth"]')!;
+    const endYear = card.querySelector<HTMLInputElement>('input[data-w="endYear"]')!;
+    const on = currentCheckbox.checked;
+    endMonth.disabled = on;
+    endYear.disabled = on;
+    if (on) { endMonth.value = ""; endYear.value = ""; }
+  });
+
+  return card;
+}
+
+function monthSelectHtml(field: "startMonth" | "endMonth", selected: string, disabled = false): string {
+  const opts = [`<option value="">Month</option>`]
+    .concat(MONTH_OPTIONS.map((m) =>
+      `<option value="${m.value}" ${m.value === selected ? "selected" : ""}>${m.label}</option>`))
+    .join("");
+  return `<select data-w="${field}" ${disabled ? "disabled" : ""}>${opts}</select>`;
+}
+
+function readWorkExperienceFromForm(): WorkExperienceEntry[] {
+  const cards = document.querySelectorAll<HTMLElement>(".work-exp-card");
+  const out: WorkExperienceEntry[] = [];
+  cards.forEach((card) => {
+    const get = (name: string): string => {
+      const el = card.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`[data-w="${name}"]`);
+      return el ? el.value.trim() : "";
+    };
+    const isCurrent = (card.querySelector<HTMLInputElement>('input[data-w="currentlyWorking"]')?.checked) ?? false;
+    out.push({
+      id: crypto.randomUUID(),
+      jobTitle: get("jobTitle"),
+      company: get("company"),
+      location: get("location"),
+      currentlyWorking: isCurrent,
+      startMonth: get("startMonth"),
+      startYear: get("startYear"),
+      endMonth: isCurrent ? "" : get("endMonth"),
+      endYear: isCurrent ? "" : get("endYear"),
+      description: get("description"),
+    });
+  });
+  return out;
+}
+
+function addWorkExperienceEntry(): void {
+  const entries = readWorkExperienceFromForm();
+  if (entries.length >= MAX_WORK_EXPERIENCE) return;
+  entries.push(emptyWorkExperience());
+  renderWorkExperienceList(entries);
+}
+
+function updateAddWorkExpButton(): void {
+  const btn = $("btn-add-work-exp") as HTMLButtonElement;
+  const count = document.querySelectorAll(".work-exp-card").length;
+  btn.disabled = count >= MAX_WORK_EXPERIENCE;
+  btn.textContent = count >= MAX_WORK_EXPERIENCE
+    ? `Maximum ${MAX_WORK_EXPERIENCE} organizations reached`
+    : "Add organization";
 }
 
 // ---------- country profiles ----------
@@ -245,6 +383,19 @@ async function loadAiConfig(): Promise<void> {
   ($("ai-model") as HTMLInputElement).value = cfg.model;
   ($("ai-enabled") as HTMLInputElement).checked = cfg.enabled;
   ($("ai-auto") as HTMLInputElement).checked = cfg.autoMatch;
+  syncAiProviderUi();
+}
+
+/** Google's endpoint is fixed by the docs, so lock the base URL field there. */
+function syncAiProviderUi(): void {
+  const provider = ($("ai-provider") as HTMLSelectElement).value as AiProvider;
+  const baseUrl = $("ai-baseurl") as HTMLInputElement;
+  const model = $("ai-model") as HTMLInputElement;
+  const isGoogle = provider === "google";
+  baseUrl.disabled = isGoogle;
+  if (isGoogle) baseUrl.value = AI_PROVIDER_PRESETS.google.baseUrl;
+  if (isGoogle && shouldUseGoogleDefaultModel(model.value)) model.value = AI_PROVIDER_PRESETS.google.modelHint;
+  baseUrl.title = isGoogle ? "Fixed endpoint for Google Gemini - only the API key is needed." : "";
 }
 
 function readAiForm() {
@@ -260,24 +411,18 @@ function readAiForm() {
 }
 
 async function saveAiSettings(): Promise<void> {
-  const cfg = readAiForm();
+  const cfg = normalizeAiConfig(readAiForm());
   const msg = $("ai-msg");
+  if (cfg.enabled && cfg.provider === "google" && !cfg.apiKey) {
+    msg.textContent = "API key is required to enable.";
+    return;
+  }
   if (cfg.enabled && (!cfg.baseUrl || !cfg.apiKey || !cfg.model)) {
     msg.textContent = "Base URL, API key, and model are required to enable.";
     return;
   }
   if (cfg.baseUrl) {
-    // the service worker needs cross-origin permission for this host
-    try {
-      const origin = new URL(cfg.baseUrl).origin + "/*";
-      const granted = await chrome.permissions.request({ origins: [origin] });
-      if (!granted && cfg.enabled) {
-        msg.textContent = "Permission for that host was declined - AI calls will fail.";
-      }
-    } catch {
-      msg.textContent = "Base URL is not a valid URL.";
-      return;
-    }
+    try { new URL(cfg.baseUrl); } catch { msg.textContent = "Base URL is not a valid URL."; return; }
   }
   await db.saveAiConfig(cfg);
   flash("ai-msg", "Saved.");
@@ -286,15 +431,14 @@ async function saveAiSettings(): Promise<void> {
 async function testAiConnection(): Promise<void> {
   const msg = $("ai-msg");
   msg.textContent = "Testing…";
-  const cfg = readAiForm();
-  if (!cfg.baseUrl || !cfg.apiKey || !cfg.model) {
-    msg.textContent = "Fill base URL, API key, and model first.";
+  const cfg = normalizeAiConfig(readAiForm());
+  if (cfg.provider === "google" ? !cfg.apiKey : (!cfg.baseUrl || !cfg.apiKey || !cfg.model)) {
+    msg.textContent = cfg.provider === "google"
+      ? "Paste your Google API key first."
+      : "Fill base URL, API key, and model first.";
     return;
   }
   try {
-    const origin = new URL(cfg.baseUrl).origin + "/*";
-    const granted = await chrome.permissions.request({ origins: [origin] });
-    if (!granted) { msg.textContent = "Host permission declined - cannot call the API."; return; }
     const result = await aiMatch(
       cfg, "test://job",
       "Job: Software Developer. Requirements: programming experience.",
@@ -364,7 +508,7 @@ function renderHistoryGrid(apps: ApplicationRecord[]): void {
       <td>${escapeHtml(app.jobTitle)}</td>
       <td>${escapeHtml(app.jobCountry)}</td>
       <td>${escapeHtml(app.portal)}</td>
-      <td>${app.jobUrl ? `<a class="job-link" href="${escapeHtml(app.jobUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(app.jobUrl)}">Go to URL</a>` : "-"}</td>`;
+      <td>${safeHref(app.jobUrl) ? `<a class="job-link" href="${escapeHtml(safeHref(app.jobUrl))}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(safeHref(app.jobUrl))}">Go to URL</a>` : "-"}</td>`;
     const statusTd = document.createElement("td");
     statusTd.appendChild(statusSelect(app));
     const td = document.createElement("td");
@@ -420,13 +564,14 @@ function historyBoardCard(app: ApplicationRecord): HTMLElement {
 
   const actions = document.createElement("div");
   actions.className = "history-card-actions";
-  if (app.jobUrl) {
+  const safeJobUrl = safeHref(app.jobUrl);
+  if (safeJobUrl) {
     const link = document.createElement("a");
     link.className = "job-link";
-    link.href = app.jobUrl;
+    link.href = safeJobUrl;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
-    link.title = app.jobUrl;
+    link.title = safeJobUrl;
     link.textContent = "Go to URL";
     actions.appendChild(link);
   } else {
@@ -628,8 +773,19 @@ function escapeHtml(s: string): string {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 }
 
+/** Only allow http/https URLs into href attributes. Blocks javascript:, data:,
+ * vbscript:, etc. Returns "" for anything else. */
+function safeHref(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.protocol === "http:" || u.protocol === "https:") return u.href;
+  } catch { /* not a URL */ }
+  return "";
+}
+
 function wireEvents(): void {
   $("btn-save-profile").addEventListener("click", () => void saveProfileFromForm());
+  $("btn-add-work-exp").addEventListener("click", () => addWorkExperienceEntry());
   $("btn-save-country").addEventListener("click", () => void saveCountryFromForm());
   $("btn-add-resume").addEventListener("click", () => void addResume());
   $("btn-export-xlsx").addEventListener("click", () => void exportXlsx());
@@ -645,12 +801,14 @@ function wireEvents(): void {
   $("btn-save-ai").addEventListener("click", () => void saveAiSettings());
   $("btn-test-ai").addEventListener("click", () => void testAiConnection());
   $("ai-provider").addEventListener("change", () => {
-    const preset = AI_PROVIDER_PRESETS[($("ai-provider") as HTMLSelectElement).value as AiProvider];
+    const provider = ($("ai-provider") as HTMLSelectElement).value as AiProvider;
+    const preset = AI_PROVIDER_PRESETS[provider];
     ($("ai-baseurl") as HTMLInputElement).value = preset.baseUrl;
     ($("ai-model") as HTMLInputElement).placeholder = preset.modelHint;
-    if (!($("ai-model") as HTMLInputElement).value) {
+    if (provider === "google" || !($("ai-model") as HTMLInputElement).value) {
       ($("ai-model") as HTMLInputElement).value = preset.modelHint;
     }
+    syncAiProviderUi();
   });
 }
 

@@ -7,7 +7,7 @@ import {
   FieldSignals, isEeoQuestion, isResumeUpload, matchField, pickOption, valueFits,
 } from "../lib/fieldMatcher";
 import { ContentCommand, FillContext, normalizeQuestion } from "../lib/messages";
-import { FillReport, JobInfo, MissingField } from "../lib/types";
+import { FillReport, JobInfo, MissingField, WorkExperienceEntry } from "../lib/types";
 
 declare global {
   interface Window { __fireapplyLoaded?: boolean }
@@ -31,6 +31,13 @@ function init(): void {
         }
         void announceCurrentJob(true).then((result) => sendResponse({ ok: true, ...result }));
         return true;
+      case "getPageText":
+        if (window !== window.top) {
+          sendResponse({ ok: true, ignored: true, text: "" });
+          return false;
+        }
+        sendResponse({ ok: true, text: visiblePageText(), pageTitle: document.title });
+        return false;
       case "fillWithContext":
         void fillPage(msg.applicationId, msg.ctx).then(() => sendResponse({ ok: true }));
         return true;
@@ -69,12 +76,15 @@ function armSpaWatch(): void {
   let lastUrl = location.href;
   setInterval(() => {
     if (location.href === lastUrl) return;
+    const prevId = linkedInJobId(lastUrl);
+    const nextId = linkedInJobId(location.href);
     lastUrl = location.href;
-    setTimeout(() => {
-      void announceCurrentJob(true);
-      detectLikelyApplied();
-    }, 1200); // let the new job pane render
-  }, 1000);
+    // jobChanged = the URL clearly points at a different job (LinkedIn ids);
+    // background blanks the old data and shows the loading state right away
+    const jobChanged = (!!prevId || !!nextId) && prevId !== nextId;
+    void chrome.runtime.sendMessage({ type: "pageChanging", jobChanged }).catch(() => undefined);
+    void announceWhenReady();
+  }, 700);
 
   if (detectPortal(location.href) === "linkedin") {
     let timer: number | undefined;
@@ -86,7 +96,70 @@ function armSpaWatch(): void {
   }
 }
 
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+let announceToken = 0;
+
+/** Wait until the page shows a consistent scrape of the job the URL points at,
+ * then announce it. Never announces half-rendered or mismatched job details. */
+async function announceWhenReady(): Promise<void> {
+  const token = ++announceToken;
+  const deadline = Date.now() + 9000;
+  let lastKey = "";
+  while (Date.now() < deadline) {
+    await sleep(700);
+    if (token !== announceToken) return; // superseded by a newer navigation
+    const job = extractJobInfo();
+    if (!jobScrapeReady(job)) { lastKey = ""; continue; }
+    const key = jobKey(job);
+    if (key && key === lastKey) { // stable across two consecutive polls
+      await announceCurrentJob(true);
+      detectLikelyApplied();
+      return;
+    }
+    lastKey = key;
+  }
+  // Timed out: never report possibly-wrong details. Send an empty signal so
+  // the side panel stops its loading state and stays blank instead of stale.
+  const job = extractJobInfo();
+  if (jobScrapeReady(job)) {
+    await announceCurrentJob(true);
+  } else {
+    void chrome.runtime.sendMessage({
+      type: "pageAnalyzed",
+      job: { ...job, title: "", description: "" },
+    }).catch(() => undefined);
+  }
+  detectLikelyApplied();
+}
+
+/** True when the scraped details are trustworthy for the current URL. */
+function jobScrapeReady(job: JobInfo): boolean {
+  if (!job.title.trim()) return false;
+  if (job.portal !== "linkedin") return true;
+  const urlId = linkedInJobId(location.href);
+  const paneId = linkedInDetailPaneJobId();
+  // the detail pane still shows the previously selected job
+  if (urlId && paneId && urlId !== paneId) return false;
+  return true;
+}
+
+function linkedInDetailPaneJobId(): string {
+  const pane = document.querySelector<HTMLElement>(
+    ".job-details-jobs-unified-top-card, .jobs-unified-top-card, .jobs-search__job-details--container, .top-card-layout",
+  );
+  const link = pane?.querySelector<HTMLAnchorElement>("a[href*='/jobs/view/']");
+  return link?.href.match(/\/jobs\/view\/(\d+)/)?.[1] ?? "";
+}
+
 async function announceCurrentJob(force = false): Promise<{ applicationId?: string; job: JobInfo }> {
+  if (detectPortal(location.href) === "linkedin") {
+    const probe = extractJobInfo();
+    if (!jobScrapeReady(probe)) {
+      // never report a stale pane; blank title so callers keep retrying
+      return { job: { ...probe, title: "", description: "" } };
+    }
+  }
   const result = await analyzeAndReport();
   const key = jobKey(result.job);
   if (!force && key && key === lastAnnouncedJobKey) return result;
@@ -99,7 +172,8 @@ async function announceCurrentJob(force = false): Promise<{ applicationId?: stri
 
 function jobKey(job: JobInfo): string {
   const linkedInId = job.portal === "linkedin" ? linkedInJobId(job.url) : "";
-  if (linkedInId) return `linkedin:${linkedInId}`;
+  // include the title so a corrected scrape of the same job id re-announces
+  if (linkedInId) return `linkedin:${linkedInId}|${job.title.toLowerCase().replace(/\s+/g, " ").trim()}`;
   return [
     job.url,
     job.title.toLowerCase().replace(/\s+/g, " ").trim(),
@@ -297,9 +371,15 @@ function textAll(selectors: string[], root: ParentNode = document): string[] {
 
 function linkedInJobDetails(): { title: string; company: string; location: string; applicants: string; description: string } {
   const topCard = document.querySelector<HTMLElement>(
-    ".job-details-jobs-unified-top-card, .jobs-unified-top-card, .top-card-layout, .jobs-search__job-details--container, main",
+    ".job-details-jobs-unified-top-card, .jobs-unified-top-card, .top-card-layout, .jobs-search__job-details--container",
   );
-  const searchRoot = topCard ?? document;
+  // On search/collections pages the whole page is a job list; only the detail
+  // pane may be scraped. Broad fallbacks are allowed on /jobs/view/ pages only.
+  const onJobView = /\/jobs\/view\//.test(location.pathname);
+  const searchRoot: ParentNode | null = topCard ?? (onJobView ? document.querySelector("main") ?? document : null);
+  if (!searchRoot) {
+    return { title: "", company: "", location: "", applicants: "", description: "" };
+  }
   const title = textFrom([
     ".job-details-jobs-unified-top-card__job-title a",
     ".job-details-jobs-unified-top-card__job-title",
@@ -311,7 +391,7 @@ function linkedInJobDetails(): { title: string; company: string; location: strin
     '[data-test-job-title]',
     ".top-card-layout__title",
     "h1",
-  ], searchRoot) || linkedInTitleFromDocument();
+  ], searchRoot) || (onJobView ? linkedInTitleFromDocument() : "");
   const explicitCompany = cleanLinkedInMeta(textFrom([
     ".job-details-jobs-unified-top-card__company-name a",
     ".job-details-jobs-unified-top-card__company-name",
@@ -323,7 +403,7 @@ function linkedInJobDetails(): { title: string; company: string; location: strin
     "a[href*='linkedin.com/company/']",
     "a[href^='/company/']",
     ".topcard__org-name-link",
-  ], searchRoot)) || linkedInCompanyFromDocument();
+  ], searchRoot)) || (onJobView ? linkedInCompanyFromDocument() : "");
   const primaryText = textFrom([
     ".job-details-jobs-unified-top-card__primary-description-container",
     ".job-details-jobs-unified-top-card__primary-description",
@@ -365,14 +445,15 @@ function linkedInJobDetails(): { title: string; company: string; location: strin
   ].filter(Boolean);
   const parsed = parseLinkedInMeta(lines, title, explicitCompany);
   const descriptionRoot = document.querySelector<HTMLElement>(
-    "#job-details, .jobs-description__container, .jobs-description-content__text, main",
+    "#job-details, .jobs-description__container, .jobs-description-content__text" + (onJobView ? ", main" : ""),
   );
   return {
     title,
     company: explicitCompany || parsed.company,
     location: parsed.location,
     applicants: parsed.applicants,
-    description: descriptionRoot?.innerText?.replace(/\s+/g, " ").trim() || visiblePageText(),
+    description: descriptionRoot?.innerText?.replace(/\s+/g, " ").trim()
+      || (onJobView ? visiblePageText() : ""),
   };
 }
 
@@ -538,6 +619,231 @@ async function startAssist(): Promise<{ applicationId?: string; job: JobInfo }> 
 const fieldRegistry = new Map<string, HTMLElement>();
 let fieldCounter = 0;
 
+// ---------- multi-organization work experience (Workday-style repeating blocks) ----------
+
+async function fillWorkExperienceBlocks(
+  ctx: FillContext, report: FillReport, filledSet: Set<HTMLElement>,
+): Promise<void> {
+  const entries = ctx.workExperience ?? [];
+  if (entries.length === 0) return;
+  if (!hasWorkExperienceSection()) return;
+
+  await ensureWorkExperienceBlocks(entries.length);
+  const blocks = findWorkExperienceBlocks();
+  if (blocks.length === 0) return;
+
+  const n = Math.min(blocks.length, entries.length);
+  for (let i = 0; i < n; i++) {
+    fillWorkExperienceBlock(blocks[i], entries[i], report, filledSet);
+  }
+}
+
+function hasWorkExperienceSection(): boolean {
+  const patterns = /\b(work experience|employment history|work history|professional experience)\b/i;
+  for (const el of document.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,legend,[role='heading'],label")) {
+    const t = (el.textContent ?? "").trim();
+    if (t && t.length < 80 && patterns.test(t)) return true;
+  }
+  return false;
+}
+
+/** Detect repeating work-experience blocks. Workday numbers them "Work Experience 1..N";
+ * generic fallback: sibling fieldsets/sections whose heading matches. */
+function findWorkExperienceBlocks(): HTMLElement[] {
+  const heads: HTMLElement[] = [];
+  const numbered = /^\s*(work experience|employment)\s+\d+\s*$/i;
+  for (const el of document.querySelectorAll<HTMLElement>(
+    "h1,h2,h3,h4,h5,h6,legend,[role='heading']"
+  )) {
+    const t = (el.textContent ?? "").trim();
+    if (t && numbered.test(t)) heads.push(el);
+  }
+
+  const blocks: HTMLElement[] = [];
+  const seen = new Set<HTMLElement>();
+  for (const h of heads) {
+    const block = (h.closest("fieldset, section, [role='group'], [data-automation-id]") as HTMLElement | null)
+      ?? h.parentElement;
+    if (block && !seen.has(block) && isVisible(block)) {
+      seen.add(block);
+      blocks.push(block);
+    }
+  }
+  return blocks;
+}
+
+async function ensureWorkExperienceBlocks(need: number): Promise<void> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const have = findWorkExperienceBlocks().length;
+    if (have >= need) return;
+    const addBtn = findAddWorkExpButton();
+    if (!addBtn) return;
+    addBtn.click();
+    await sleep(500);
+  }
+}
+
+function findAddWorkExpButton(): HTMLElement | null {
+  const re = /^(add another|add work experience|add employment|add more|\+\s*add|add organization|add job)$/i;
+  for (const btn of document.querySelectorAll<HTMLElement>("button, [role='button'], a")) {
+    const t = (btn.textContent ?? "").trim();
+    if (t && re.test(t) && isVisible(btn)) return btn;
+  }
+  return null;
+}
+
+function fillWorkExperienceBlock(
+  block: HTMLElement, entry: WorkExperienceEntry,
+  report: FillReport, filledSet: Set<HTMLElement>,
+): void {
+  const trySet = (patterns: RegExp[], value: string, kindHint: "text" | "textarea" = "text"): void => {
+    if (!value) return;
+    const el = findInputInBlock(block, patterns, kindHint);
+    if (!el || filledSet.has(el) || isFilled(el)) return;
+    if (setFieldValue(el, value)) {
+      filledSet.add(el);
+      report.filled.push({
+        fieldId: register(el), question: labelTextFor(el) || patterns[0].source,
+        value, confidence: "high",
+      });
+      highlight(el, "filled");
+    }
+  };
+
+  trySet([/^job title|position title|title$/i], entry.jobTitle);
+  trySet([/^company|employer|organi[sz]ation/i], entry.company);
+  trySet([/^location|^city/i], entry.location);
+  trySet([/role description|responsibilities|description|summary/i], entry.description, "textarea");
+
+  if (entry.currentlyWorking) {
+    const cb = findCheckboxInBlock(block, /currently work here|present position|i currently work/i);
+    if (cb && !filledSet.has(cb) && !cb.checked) {
+      cb.click();
+      filledSet.add(cb);
+      report.filled.push({
+        fieldId: register(cb), question: "Currently work here",
+        value: "Yes", confidence: "high",
+      });
+      highlight(cb, "filled");
+    }
+  }
+
+  fillWorkExpDate(block, "from", entry.startMonth, entry.startYear, report, filledSet);
+  if (!entry.currentlyWorking) {
+    fillWorkExpDate(block, "to", entry.endMonth, entry.endYear, report, filledSet);
+  }
+}
+
+function findInputInBlock(
+  block: HTMLElement, patterns: RegExp[], kindHint: "text" | "textarea",
+): (HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement) | null {
+  const selector = kindHint === "textarea"
+    ? "textarea"
+    : "input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='checkbox']):not([type='radio']):not([type='file']), textarea, select";
+  const candidates = block.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(selector);
+  for (const el of candidates) {
+    if (!isVisible(el)) continue;
+    const label = labelTextFor(el);
+    const aria = el.getAttribute("aria-label") ?? ariaLabelledText(el);
+    const placeholder = (el as HTMLInputElement).placeholder ?? "";
+    const auto = el.getAttribute("data-automation-id") ?? "";
+    const combined = `${label} ${aria} ${placeholder} ${auto}`;
+    if (patterns.some((p) => p.test(combined))) return el;
+  }
+  return null;
+}
+
+function findCheckboxInBlock(block: HTMLElement, pattern: RegExp): HTMLInputElement | null {
+  for (const el of block.querySelectorAll<HTMLInputElement>("input[type='checkbox']")) {
+    if (!isVisible(el)) continue;
+    const label = labelTextFor(el);
+    const aria = el.getAttribute("aria-label") ?? ariaLabelledText(el);
+    if (pattern.test(`${label} ${aria}`)) return el;
+  }
+  return null;
+}
+
+/** Fill a date range half (from or to). Workday uses month + year spinbutton pairs;
+ * this also handles native month inputs and select/text combos by proximity. */
+function fillWorkExpDate(
+  block: HTMLElement, half: "from" | "to", month: string, year: string,
+  report: FillReport, filledSet: Set<HTMLElement>,
+): void {
+  if (!month && !year) return;
+
+  const headingRe = half === "from"
+    ? /^\s*(from|start( date)?)\s*\*?\s*$/i
+    : /^\s*(to|end( date)?)\s*\*?\s*$/i;
+  const container = findDateContainer(block, headingRe);
+  if (!container) return;
+
+  const monthEl = findDateSubInput(container, /month/i);
+  const yearEl = findDateSubInput(container, /year/i);
+
+  if (month && monthEl && !filledSet.has(monthEl)) {
+    const value = setDateSubInput(monthEl, month);
+    if (value) {
+      filledSet.add(monthEl);
+      report.filled.push({
+        fieldId: register(monthEl), question: `${half} month`,
+        value, confidence: "high",
+      });
+      highlight(monthEl, "filled");
+    }
+  }
+  if (year && yearEl && !filledSet.has(yearEl)) {
+    if (setFieldValue(yearEl as HTMLInputElement, year)) {
+      filledSet.add(yearEl);
+      report.filled.push({
+        fieldId: register(yearEl), question: `${half} year`,
+        value: year, confidence: "high",
+      });
+      highlight(yearEl, "filled");
+    }
+  }
+}
+
+function findDateContainer(block: HTMLElement, headingRe: RegExp): HTMLElement | null {
+  for (const el of block.querySelectorAll<HTMLElement>(
+    "label, legend, [role='group'] > label, div, span, h3, h4, h5"
+  )) {
+    const t = (el.textContent ?? "").trim();
+    if (t && t.length < 40 && headingRe.test(t)) {
+      // Walk up to a parent that also contains month+year sub-inputs.
+      let node: HTMLElement | null = el.parentElement;
+      for (let depth = 0; node && depth < 4; depth++, node = node.parentElement) {
+        if (node.querySelector("input, select")) return node;
+      }
+    }
+  }
+  return null;
+}
+
+function findDateSubInput(container: HTMLElement, kindRe: RegExp): HTMLInputElement | HTMLSelectElement | null {
+  for (const el of container.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")) {
+    if (!isVisible(el)) continue;
+    const aria = el.getAttribute("aria-label") ?? ariaLabelledText(el);
+    const placeholder = (el as HTMLInputElement).placeholder ?? "";
+    const auto = el.getAttribute("data-automation-id") ?? "";
+    if (kindRe.test(`${aria} ${placeholder} ${auto}`)) return el;
+  }
+  return null;
+}
+
+/** Workday month spinbuttons accept "01".."12" as raw text; native selects want
+ * either "MM" or the month name. Try text first, fall back to the month label. */
+function setDateSubInput(el: HTMLInputElement | HTMLSelectElement, month: string): string {
+  if (el instanceof HTMLSelectElement) {
+    if (setFieldValue(el, month)) return month;
+    const names = ["January","February","March","April","May","June",
+      "July","August","September","October","November","December"];
+    const idx = parseInt(month, 10);
+    if (idx >= 1 && idx <= 12 && setFieldValue(el, names[idx - 1])) return names[idx - 1];
+    return "";
+  }
+  return setFieldValue(el, month) ? month : "";
+}
+
 async function fillPage(applicationId: string, ctx: FillContext): Promise<void> {
   fieldRegistry.clear();
   const report: FillReport = { filled: [], missing: [], warnings: [], resumeAttached: false };
@@ -547,8 +853,12 @@ async function fillPage(applicationId: string, ctx: FillContext): Promise<void> 
   // auto-resume (background re-triggers on navigation, watcher on SPA login)
   if (hasLoginForm()) armLoginWatch();
 
+  const preFilled = new Set<HTMLElement>();
+  await fillWorkExperienceBlocks(ctx, report, preFilled);
+
   const inputs = collectInputs();
   for (const el of inputs) {
+    if (preFilled.has(el)) continue;
     const signals = collectSignals(el);
     const question = bestQuestion(signals);
 

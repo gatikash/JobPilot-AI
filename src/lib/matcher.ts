@@ -145,7 +145,14 @@ function appendPath(base: URL, suffix: string): string {
   return base.toString();
 }
 
+// Fixed OpenAI-compatible endpoint per https://ai.google.dev/gemini-api/docs/openai
+const GOOGLE_CHAT_COMPLETIONS_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+const GOOGLE_DEFAULT_MODEL = "gemini-3.1-flash-lite";
+
 function chatCompletionsUrl(cfg: AiConfig): string {
+  // Google's endpoint is documented and fixed; only the API key is needed.
+  if (cfg.provider === "google") return GOOGLE_CHAT_COMPLETIONS_URL;
+
   const raw = cfg.baseUrl.trim().replace(/\/+$/, "");
   if (!raw) throw new Error("AI base URL is empty.");
 
@@ -253,19 +260,23 @@ function extractChatText(data: unknown): string {
 
 function shouldRetryWithoutStrictJson(e: unknown): boolean {
   if (!(e instanceof Error)) return false;
-  return /\b(response_format|json|schema|max_completion_tokens|temperature)\b/i.test(e.message);
+  return /\b(response_format|json|schema|max_completion_tokens|reasoning_effort|temperature)\b/i.test(e.message);
 }
 
 async function callOpenAiCompatible(cfg: AiConfig, messages: ChatMessage[]): Promise<string> {
   const url = chatCompletionsUrl(cfg);
   const headers = openAiCompatibleHeaders(cfg);
+  const model = cfg.model.trim() || (cfg.provider === "google" ? GOOGLE_DEFAULT_MODEL : cfg.model);
   const baseBody: JsonObject = {
-    model: cfg.model,
+    model,
     messages,
     temperature: 0,
     max_completion_tokens: 900,
     response_format: { type: "json_object" },
   };
+  if (cfg.provider === "google" && model === GOOGLE_DEFAULT_MODEL) {
+    baseBody.reasoning_effort = "minimal";
+  }
 
   try {
     return extractChatText(await postJson(url, headers, baseBody));
@@ -275,6 +286,7 @@ async function callOpenAiCompatible(cfg: AiConfig, messages: ChatMessage[]): Pro
     const fallbackBody = { ...baseBody };
     delete fallbackBody.response_format;
     delete fallbackBody.max_completion_tokens;
+    delete fallbackBody.reasoning_effort;
     fallbackBody.max_tokens = 900;
     return extractChatText(await postJson(url, headers, fallbackBody));
   }
@@ -322,6 +334,45 @@ export async function aiMatch(
     source: "ai",
     model: cfg.model,
     createdAt: Date.now(),
+  };
+}
+
+export interface ExtractedJob {
+  title: string;
+  company: string;
+  location: string;
+  description: string;
+}
+
+/** Ask the model to pull job details out of raw page text when DOM scraping
+ * found nothing usable. */
+export async function aiExtractJob(cfg: AiConfig, pageText: string): Promise<ExtractedJob> {
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content: "You extract job-posting details from raw web page text. Return only valid JSON.",
+    },
+    {
+      role: "user",
+      content: [
+        "Extract the job posting details from this page text.",
+        "If the page is not a job posting, return empty strings.",
+        "Do not invent details that are not present in the text.",
+        'Return JSON exactly like: {"title":"...","company":"...","location":"...","description":"..."}',
+        "description = the job's responsibilities/requirements text, condensed to at most 400 words.",
+        "",
+        "PAGE TEXT:",
+        pageText.slice(0, MAX_JD_CHARS * 2),
+      ].join("\n"),
+    },
+  ];
+  const data = parseJsonObject(await callModel(cfg, messages));
+  const str = (key: string, max: number): string => String(data[key] ?? "").trim().slice(0, max);
+  return {
+    title: str("title", 200),
+    company: str("company", 200),
+    location: str("location", 200),
+    description: str("description", MAX_JD_CHARS),
   };
 }
 

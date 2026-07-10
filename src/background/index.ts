@@ -4,9 +4,10 @@
 
 import { b64 } from "../lib/crypto";
 import * as db from "../lib/db";
+import { detectCountry, detectPortal } from "../lib/detectors";
 import {
-  aiDraftAnswer, aiMatch, aiTailorResume, localDraftAnswer, localMatch,
-  localTailorResume, MatchProfile,
+  aiDraftAnswer, aiExtractJob, aiMatch, aiTailorResume, localDraftAnswer,
+  localMatch, localTailorResume, MatchProfile,
 } from "../lib/matcher";
 import {
   BgRequest, ContentCommand, FillContext, SidePanelModel, normalizeQuestion,
@@ -35,6 +36,8 @@ interface TabState {
   lastDraft?: DraftAnswerResult;
   /** strong but user-confirmed-only submission signal from the page */
   likelyApplied?: LikelyAppliedSignal;
+  /** tab navigated away from the analyzed job; fresh analysis not in yet */
+  analyzing?: boolean;
 }
 
 function emptyTabState(): TabState {
@@ -106,11 +109,18 @@ async function setCachedTailoring(result: ResumeTailoringResult): Promise<void> 
   await chrome.storage.session.set({ [`tailor:${result.jobUrl}`]: result });
 }
 
-async function buildMatchProfiles(): Promise<MatchProfile[]> {
+async function buildMatchProfiles(countryCode: string): Promise<MatchProfile[]> {
   const resumes = await db.listResumes();
-  const profiles: MatchProfile[] = resumes
-    .filter((r) => (r.extractedText ?? "").trim().length > 40)
-    .map((r) => ({ name: r.name, text: r.extractedText }));
+  const usable = resumes.filter((r) => (r.extractedText ?? "").trim().length > 40);
+  // Only score resumes mapped to the job's country; resumes with no country
+  // mapping act as a general fallback so cross-country resumes never mix.
+  let pool = usable;
+  if (countryCode) {
+    const byCountry = usable.filter((r) => r.countryCodes.includes(countryCode));
+    const general = usable.filter((r) => r.countryCodes.length === 0);
+    pool = byCountry.length ? byCountry : (general.length ? general : usable);
+  }
+  const profiles: MatchProfile[] = pool.map((r) => ({ name: r.name, text: r.extractedText }));
   if (profiles.length === 0) {
     // fall back to the saved profile's skills so matching still works
     const p = await db.getProfile();
@@ -146,7 +156,7 @@ async function selectedMatchProfile(countryCode: string): Promise<MatchProfile |
   if (selected && (selected.extractedText ?? "").trim().length > 40) {
     return { name: selected.name, text: selected.extractedText };
   }
-  const profiles = await buildMatchProfiles();
+  const profiles = await buildMatchProfiles(countryCode);
   return profiles[0];
 }
 
@@ -165,7 +175,7 @@ async function runMatch(tabId: number, force: boolean): Promise<unknown> {
     if (cached) { notifyPanel(); return { ok: true, cached: true }; }
   }
 
-  const profiles = await buildMatchProfiles();
+  const profiles = await buildMatchProfiles(job.countryCode);
   if (profiles.length === 0) {
     return { ok: false, error: "No resume text or skills found. Add resumes or fill your profile skills first." };
   }
@@ -278,10 +288,40 @@ async function draftAnswer(tabId: number, question: string): Promise<unknown> {
 
 // ---------- post-login auto-resume ----------
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const newUrl = changeInfo.url;
+  if (newUrl) {
+    void (async () => {
+      const state = await getTabState(tabId);
+      if (!state.job || newUrl === state.job.url) return;
+      if (sameHost(newUrl, state.job.url)) {
+        // SPA job switch or multi-step form: keep data, flag as stale until a
+        // fresh analysis lands so the panel shows loading instead of old data.
+        state.analyzing = true;
+      } else {
+        // different site: old job data is definitely wrong, blank the panel
+        blankJobState(state);
+        state.analyzing = await canInject(newUrl);
+      }
+      if (state.analyzing) scheduleAnalyzingFailsafe(tabId);
+      await setTabState(tabId, state);
+      notifyPanel();
+    })();
+  }
+
   if (changeInfo.status !== "complete") return;
   void (async () => {
     const state = await getTabState(tabId);
+
+    if (state.analyzing) scheduleAnalyzingFailsafe(tabId);
+
+    // Auto-analyze the page the user landed on (same behavior as the
+    // "Analyze profile" button) wherever the extension has host access.
+    if (tab.active && tab.url && /^https?:/.test(tab.url) &&
+        (state.analyzing || !state.job?.title)) {
+      void autoAnalyzeTab(tabId, tab.url);
+    }
+
     if (!state.pendingAssist) return;
     state.pendingAssist = false;
     state.reports = {}; // navigation invalidated old frame reports
@@ -290,6 +330,147 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     setTimeout(() => void triggerAssist(tabId), 1500);
   })();
 });
+
+function blankJobState(state: TabState): void {
+  const keep = { pendingAssist: state.pendingAssist };
+  Object.assign(state, emptyTabState(), keep);
+  state.job = undefined;
+  state.applicationId = undefined;
+  state.resumeName = undefined;
+  state.duplicateOf = undefined;
+  state.likelyApplied = undefined;
+  state.analyzing = false;
+}
+
+/** True when the extension may inject into this URL (manifest portals or a
+ * host permission the user granted). */
+async function canInject(url: string): Promise<boolean> {
+  try {
+    const origin = new URL(url).origin;
+    if (!/^https?:/.test(origin)) return false;
+    return await chrome.permissions.contains({ origins: [`${origin}/*`] });
+  } catch {
+    return false;
+  }
+}
+
+/** Job-posting signal phrases grouped by concept; a page must hit several
+ * distinct groups before we spend an AI call on it. */
+const JOB_SIGNAL_GROUPS: RegExp[] = [
+  /\bjob (title|description|summary|details?|posting|opening)\b/i,
+  /\b(responsibilities|duties|what you('|’)ll do|role overview|about the role|about this role)\b/i,
+  /\b(qualifications|requirements|what you('|’)ll need|what we('|’)re looking for|must have|skills? (required|needed))\b/i,
+  /\b(apply (now|for this|today)|submit (your )?application|application deadline|easy apply)\b/i,
+  /\b(salary|compensation|pay range|per annum|benefits include)\b/i,
+  /\b(full[- ]time|part[- ]time|contract|permanent|remote|hybrid|on[- ]site)\b/i,
+  /\b(years? of experience|experience (required|in|with))\b/i,
+  /\b(hiring|we are looking for|join our team|equal opportunity employer)\b/i,
+];
+
+/** Cheap pre-check so we never call the AI on non-job pages (feeds, home
+ * pages, social sites). Requires signals from at least 3 distinct groups. */
+function looksLikeJobPage(text: string, pageTitle: string): boolean {
+  const haystack = `${pageTitle}\n${text}`;
+  let hits = 0;
+  for (const re of JOB_SIGNAL_GROUPS) {
+    if (re.test(haystack) && ++hits >= 3) return true;
+  }
+  return false;
+}
+
+/** AI fallback: when DOM scraping finds no job, extract details from the raw
+ * page text with the configured model. Returns undefined when AI is off, the
+ * page has too little text, or the model finds no job posting. */
+async function aiExtractJobFromPage(tabId: number, url: string): Promise<JobInfo | undefined> {
+  const cfg = await db.getAiConfig().catch(() => undefined);
+  if (!cfg?.enabled || !cfg.apiKey || !cfg.model) return undefined;
+
+  const res = await chrome.tabs.sendMessage(
+    tabId, { type: "getPageText" } satisfies ContentCommand, { frameId: 0 },
+  ).catch(() => undefined) as { text?: string; pageTitle?: string } | undefined;
+  const text = (res?.text ?? "").trim();
+  if (text.length < 400) return undefined; // not enough content to be a job page
+  const pageTitle = res?.pageTitle ?? "";
+  if (!looksLikeJobPage(text, pageTitle)) return undefined; // don't waste an API call
+
+  try {
+    const extracted = await aiExtractJob(cfg, `${pageTitle}\n${text}`);
+    if (!extracted.title) return undefined;
+    return {
+      title: extracted.title,
+      company: extracted.company,
+      location: extracted.location,
+      countryCode: detectCountry(extracted.location, pageTitle, url),
+      portal: detectPortal(url),
+      url,
+      description: extracted.description || text.slice(0, 7000),
+    };
+  } catch {
+    return undefined; // extraction is best-effort; scraping error already shown
+  }
+}
+
+/** Analyze a freshly loaded page without user interaction: inject, detect the
+ * job, and kick off matching. No-op on pages we cannot reach. */
+async function autoAnalyzeTab(tabId: number, url: string): Promise<void> {
+  if (!(await canInject(url))) {
+    const s = await getTabState(tabId);
+    if (s.analyzing) {
+      s.analyzing = false;
+      await setTabState(tabId, s);
+      notifyPanel();
+    }
+    return;
+  }
+
+  const state = await getTabState(tabId);
+  if (!state.analyzing) {
+    state.analyzing = true;
+    await setTabState(tabId, state);
+    notifyPanel();
+    scheduleAnalyzingFailsafe(tabId);
+  }
+
+  try {
+    await injectContentScript(tabId);
+    const analysis = await analyzeTopFrameWithRetries(tabId, 3, 800);
+    const job = analysis.job?.title ? analysis.job : await aiExtractJobFromPage(tabId, url);
+    if (job?.title) {
+      await upsertApplication(job, tabId); // clears analyzing
+      await runMatch(tabId, false); // respects the autoMatch setting + cache
+    }
+  } finally {
+    const s = await getTabState(tabId);
+    if (s.analyzing) {
+      s.analyzing = false;
+      await setTabState(tabId, s);
+    }
+    notifyPanel();
+  }
+}
+
+/** If no fresh analysis arrives shortly, drop the loading state so the panel
+ * is not stuck on a spinner (non-job page or content script not present). */
+function scheduleAnalyzingFailsafe(tabId: number, ms = 5000): void {
+  setTimeout(() => {
+    void (async () => {
+      const s = await getTabState(tabId);
+      if (s.analyzing) {
+        s.analyzing = false;
+        await setTabState(tabId, s);
+        notifyPanel();
+      }
+    })();
+  }, ms);
+}
+
+function sameHost(a: string, b: string): boolean {
+  try {
+    return new URL(a).hostname === new URL(b).hostname;
+  } catch {
+    return false;
+  }
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -404,7 +585,6 @@ async function triggerAssist(tabId: number, topFrameOnly = false): Promise<strin
   }
   if (topFrameOnly && refreshed.job?.title) {
     await runMatch(tabId, true);
-    await runTailoring(tabId, true);
   }
   notifyPanel();
   return null;
@@ -430,7 +610,11 @@ async function analyzeActiveJob(): Promise<unknown> {
     };
   }
 
-  const analyzedJob = analysis.job;
+  let analyzedJob = analysis.job;
+  if (!analyzedJob?.title) {
+    // DOM scraping found nothing; let the AI read the raw page text
+    analyzedJob = await aiExtractJobFromPage(tab.id, tab.url);
+  }
   if (analyzedJob?.title) {
     await upsertApplication(analyzedJob, tab.id);
   }
@@ -447,7 +631,6 @@ async function analyzeActiveJob(): Promise<unknown> {
 
   const results = [
     await runMatch(tab.id, true),
-    await runTailoring(tab.id, true),
   ];
   const warnings = results
     .filter((r): r is { ok?: boolean; error?: string } => typeof r === "object" && r !== null)
@@ -529,7 +712,12 @@ async function buildFillContext(
   }
   ranked.sort((x, y) => y.rank - x.rank);
 
-  const ctx: FillContext = { profileValues: values, countryCode, savedAnswers: ranked };
+  const ctx: FillContext = {
+    profileValues: values,
+    countryCode,
+    savedAnswers: ranked,
+    workExperience: profile.workExperience ?? [],
+  };
 
   // resume selection: country match > default > single resume
   const resumes = await db.listResumes();
@@ -584,6 +772,7 @@ async function upsertApplication(job: JobInfo, tabId: number): Promise<TabState>
     state.likelyApplied = undefined;
   }
   state.job = job;
+  state.analyzing = false;
 
   if (await vaultReady()) {
     const existing = await db.listApplications();
@@ -621,6 +810,20 @@ async function upsertApplication(job: JobInfo, tabId: number): Promise<TabState>
       };
       if (!dup) await db.saveApplication(rec);
       state.applicationId = rec.id;
+    }
+
+    // a later, corrected scrape of the same job must fix the stored record
+    if (state.applicationId && job.title) {
+      const rec = await db.getApplication(state.applicationId);
+      if (rec && (rec.jobTitle !== job.title || rec.company !== job.company || rec.jobLocation !== job.location)) {
+        rec.jobTitle = job.title;
+        rec.company = job.company;
+        rec.jobLocation = job.location;
+        rec.jobCountry = countryName(job.countryCode);
+        if (job.url) rec.jobUrl = job.url;
+        rec.updatedAt = Date.now();
+        await db.saveApplication(rec);
+      }
     }
 
     const resumes = await db.listResumes();
@@ -773,10 +976,27 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
     case "activity":
       return { ok: true }; // auto-lock removed; kept for message compatibility
 
+    case "pageChanging": {
+      if (tabId === undefined) return { ok: false, error: "no tab" };
+      const state = await getTabState(tabId);
+      if (msg.jobChanged) blankJobState(state); // old job's data must not linger
+      state.analyzing = true;
+      await setTabState(tabId, state);
+      // content polls up to ~9s for a stable scrape; keep loading a bit longer
+      scheduleAnalyzingFailsafe(tabId, 11_000);
+      notifyPanel();
+      return { ok: true };
+    }
+
     case "pageAnalyzed": {
       if (tabId === undefined) return { ok: false, error: "no tab" };
       if (isEmptyJobSignal(msg.job)) {
         const prev = await getTabState(tabId);
+        if (prev.analyzing) {
+          prev.analyzing = false; // page analyzed, nothing found; stop loading state
+          await setTabState(tabId, prev);
+          notifyPanel();
+        }
         return { ok: true, applicationId: prev.applicationId, ignored: true };
       }
       const prev = await getTabState(tabId);
@@ -939,11 +1159,43 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
     case "analyzeActiveJob":
       return analyzeActiveJob();
 
+    case "resyncActiveTab": {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id || !tab.url || !/^https?:/.test(tab.url)) {
+        return { ok: false, error: "No applicable page in the active tab." };
+      }
+      // Drop any stale job/report/match cached for this tab so the panel
+      // never shows leftover data from a previous URL while the fresh
+      // analysis is in flight.
+      const state = await getTabState(tab.id);
+      blankJobState(state);
+      state.analyzing = true;
+      await setTabState(tab.id, state);
+      scheduleAnalyzingFailsafe(tab.id);
+      notifyPanel();
+      void autoAnalyzeTab(tab.id, tab.url);
+      return { ok: true };
+    }
+
     case "getSidePanelModel": {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const model: SidePanelModel = { unlocked: await vaultReady(), missing: [] };
       if (tab?.id !== undefined) {
         const state = await getTabState(tab.id);
+        // safety net: never serve job data left over from a different site
+        if (state.job && tab.url && /^https?:/.test(tab.url) && !sameHost(tab.url, state.job.url)) {
+          blankJobState(state);
+          await setTabState(tab.id, state);
+        }
+        // rescue path: tab was already loaded before the extension started
+        // (or service worker restarted), so tabs.onUpdated never fired.
+        // Kick off analysis now — sidepanel will show the spinner meanwhile.
+        if (!state.job?.title && !state.analyzing && tab.url && /^https?:/.test(tab.url)) {
+          state.analyzing = true;
+          await setTabState(tab.id, state);
+          scheduleAnalyzingFailsafe(tab.id);
+          void autoAnalyzeTab(tab.id, tab.url);
+        }
         model.job = state.job;
         model.report = mergedReport(state);
         model.missing = model.report?.missing ?? [];
@@ -951,6 +1203,7 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
         model.duplicateOf = state.duplicateOf;
         model.matchPending = state.matchPending;
         model.tailoringPending = state.tailoringPending;
+        model.analyzing = state.analyzing;
         model.lastDraft = state.lastDraft;
         model.likelyApplied = state.likelyApplied;
         if (state.job?.url) {
@@ -1006,4 +1259,35 @@ function notifyPanel(): void {
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => undefined);
+  void kickAnalyzeActiveTab();
 });
+
+chrome.runtime.onStartup.addListener(() => {
+  void kickAnalyzeActiveTab();
+});
+
+// Switching to a tab that finished loading before the extension started
+// won't fire tabs.onUpdated. Analyze it now if we haven't already.
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  void (async () => {
+    const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+    if (!tab?.url || !/^https?:/.test(tab.url)) return;
+    const state = await getTabState(tabId);
+    if (state.job?.title || state.analyzing) return;
+    state.analyzing = true;
+    await setTabState(tabId, state);
+    scheduleAnalyzingFailsafe(tabId);
+    void autoAnalyzeTab(tabId, tab.url);
+  })();
+});
+
+async function kickAnalyzeActiveTab(): Promise<void> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => [undefined] as const);
+  if (!tab?.id || !tab.url || !/^https?:/.test(tab.url)) return;
+  const state = await getTabState(tab.id);
+  if (state.job?.title || state.analyzing) return;
+  state.analyzing = true;
+  await setTabState(tab.id, state);
+  scheduleAnalyzingFailsafe(tab.id);
+  void autoAnalyzeTab(tab.id, tab.url);
+}

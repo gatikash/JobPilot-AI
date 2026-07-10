@@ -10,7 +10,7 @@ import {
 } from "./crypto";
 import {
   UserProfile, CountryProfile, ResumeMeta, SavedAnswer, ApplicationRecord,
-  AiConfig, defaultAiConfig, emptyProfile,
+  AiConfig, defaultAiConfig, normalizeAiConfig, emptyProfile,
 } from "./types";
 
 const DB_NAME = "fireapply";
@@ -162,7 +162,9 @@ async function allEnc<T>(store: string): Promise<T[]> {
 // ---- profile ----
 
 export async function getProfile(): Promise<UserProfile> {
-  return (await getEnc<UserProfile>(S_PROFILE, "me")) ?? emptyProfile();
+  const p = (await getEnc<UserProfile>(S_PROFILE, "me")) ?? emptyProfile();
+  if (!Array.isArray(p.workExperience)) p.workExperience = [];
+  return p;
 }
 
 export async function saveProfile(p: UserProfile): Promise<void> {
@@ -256,7 +258,7 @@ export async function deleteApplication(id: string): Promise<void> {
 // ---- AI config (encrypted: contains the API key) ----
 
 export async function getAiConfig(): Promise<AiConfig> {
-  return (await getEnc<AiConfig>(S_SECURE, "aiConfig")) ?? defaultAiConfig();
+  return normalizeAiConfig((await getEnc<AiConfig>(S_SECURE, "aiConfig")) ?? defaultAiConfig());
 }
 
 export async function saveAiConfig(cfg: AiConfig): Promise<void> {

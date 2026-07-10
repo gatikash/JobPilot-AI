@@ -247,6 +247,33 @@
       font-size: 12px;
       text-align: center;
     }
+    .work-exp-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      background: #f9fbff;
+    }
+    .work-exp-card .work-exp-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .work-exp-card .work-exp-head b { font-size: 13px; }
+    .work-exp-card .work-exp-remove {
+      background: #fff;
+      color: var(--red);
+      border-color: #fecaca;
+      padding: 4px 10px;
+      font-size: 12px;
+    }
+    .work-exp-card .work-exp-remove:hover { background: var(--red); color: #fff; border-color: var(--red); }
+    .work-exp-card label { font-size: 12px; }
+    .work-exp-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .work-exp-date-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .work-exp-current { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; }
+    .work-exp-current input[type="checkbox"] { width: auto; margin: 0; }
     .settings-top { margin-bottom: 18px; }
     .options-page > h1 { display: none; }
     @media (max-width: 760px) {
@@ -346,6 +373,12 @@
           <div><label>Portfolio URL</label><input data-f="portfolioUrl" placeholder="https://yourportfolio.dev" /></div>
           <div><label>Personal website</label><input data-f="personalWebsite" placeholder="https://yoursite.com" /></div>
         </div>
+        <h2>Work experience <span class="muted" style="font-weight:400; font-size:12px;">(up to 4 past/current organizations - used for Workday-style multi-instance forms)</span></h2>
+        <div id="work-experience-list"></div>
+        <div style="margin-top:8px;">
+          <button id="btn-add-work-exp" class="secondary" type="button">Add organization</button>
+          <span class="muted" style="margin-left:8px;">Newest first. Filled in order from top to bottom.</span>
+        </div>
         <h2>Default cover letter text</h2>
         <textarea data-f="coverLetterText" rows="5" placeholder="Generic cover letter used when a form has a cover-letter box. You can still edit it on the page after filling."></textarea>
         <div style="margin-top:14px;"><button id="btn-save-profile">Save profile</button> <span id="profile-saved" class="muted"></span></div>
@@ -436,6 +469,7 @@
               <option value="openrouter">OpenRouter (recommended - one key, all models)</option>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic (Claude)</option>
+              <option value="google">Google (Gemini)</option>
               <option value="custom">Custom (OpenAI-compatible URL)</option>
             </select>
           </div>
@@ -452,7 +486,10 @@
         </div>
         <p class="muted">Cheap/fast models are enough for scoring — e.g.
           <code>google/gemini-2.0-flash-lite-001</code> or <code>deepseek/deepseek-chat</code> on OpenRouter,
-          <code>gpt-4o-mini</code> on OpenAI, <code>claude-haiku-4-5-20251001</code> on Anthropic.
+          <code>gpt-4o-mini</code> on OpenAI, <code>claude-haiku-4-5-20251001</code> on Anthropic,
+          <code>gemini-3.1-flash-lite</code> on Google.
+          For Google (Gemini), only the API key is needed — the endpoint and a default
+          model are set automatically per the official docs.
           Results are cached per job, so re-opening a job costs nothing.</p>
       </div>
     </section>

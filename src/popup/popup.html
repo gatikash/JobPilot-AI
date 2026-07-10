@@ -50,16 +50,17 @@
 
   <div id="main-view" class="hidden">
     <div class="card">
-      <div class="status-line"><span class="muted">Portal <i class="tip" data-tip="Job site detected on the current tab (Greenhouse, Lever, Workday, LinkedIn, or generic). Determines which filling rules are used.">i</i></span><span id="st-portal">-</span></div>
-      <div class="status-line"><span class="muted">Country <i class="tip" data-tip="Country detected from the job's location text. Picks which resume, salary, and visa answers are used. If wrong or missing, JobPilot AI asks before filling country-specific answers.">i</i></span><span id="st-country">-</span></div>
-      <div class="status-line"><span class="muted">Resume <i class="tip" data-tip="Resume auto-selected for the detected country (falls back to your default). Confirm it in the side panel before it is attached.">i</i></span><span id="st-resume">-</span></div>
+      <p id="popup-empty" class="muted popup-copy hidden">No job detected on this tab. Navigate to a job posting — JobPilot analyzes it automatically.</p>
+      <div id="popup-status">
+        <div class="status-line"><span class="muted">Portal <i class="tip" data-tip="Job site detected on the current tab (Greenhouse, Lever, Workday, LinkedIn, or generic). Determines which filling rules are used.">i</i></span><span id="st-portal">-</span></div>
+        <div class="status-line"><span class="muted">Country <i class="tip" data-tip="Country detected from the job's location text. Picks which resume, salary, and visa answers are used. If wrong or missing, JobPilot AI asks before filling country-specific answers.">i</i></span><span id="st-country">-</span></div>
+        <div class="status-line"><span class="muted">Resume <i class="tip" data-tip="Resume auto-selected for the detected country (falls back to your default). Confirm it in the side panel before it is attached.">i</i></span><span id="st-resume">-</span></div>
+      </div>
     </div>
     <div class="actions">
-      <button id="btn-assist">Start Assist on this page</button>
-      <button id="btn-panel" class="secondary">Open side panel</button>
+      <button id="btn-panel">Open side panel</button>
       <button id="btn-options" class="secondary">Profile &amp; settings</button>
     </div>
-    <p id="assist-error" class="muted" style="color:var(--red)"></p>
   </div>
 
   <script type="module" src="popup.js"></script>
