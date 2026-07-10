@@ -193,7 +193,7 @@ function openAiCompatibleHeaders(cfg: AiConfig): Record<string, string> {
     "Authorization": `Bearer ${cfg.apiKey}`,
   };
   if (cfg.provider === "openrouter") {
-    headers["HTTP-Referer"] = "https://github.com/gatikash/FireApply";
+    headers["HTTP-Referer"] = "https://github.com/gatikash/JobPilot-AI";
     headers["X-OpenRouter-Title"] = "JobPilot AI";
   }
   return headers;

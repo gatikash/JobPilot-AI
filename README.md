@@ -196,8 +196,8 @@ Read-only matching and tracking are supported for:
 ### Build
 
 ```bash
-git clone https://github.com/gatikash/FireApply.git
-cd FireApply
+git clone https://github.com/gatikash/JobPilot-AI.git
+cd JobPilot-AI
 npm install
 npm run build
 ```
