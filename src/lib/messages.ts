@@ -47,7 +47,21 @@ export type BgRequest =
   | { type: "saveJobForLater" }
   /** content script asks whether the side panel is currently open;
    * used to gate automatic re-fills on modal mutations */
-  | { type: "isSidePanelOpen" };
+  | { type: "isSidePanelOpen" }
+  /** AI fallback for the rule-based matcher: content sends fields that the
+   * deterministic matcher could not classify plus the list of available
+   * profile keys, background calls the configured model, response comes
+   * back as { idx -> profileKey } */
+  | { type: "aiMapFields"; fields: AiMapFieldInput[]; profileKeys: string[] };
+
+export interface AiMapFieldInput {
+  idx: number;
+  label: string;
+  placeholder: string;
+  aria: string;
+  nearby: string;
+  name: string;
+}
 
 // background -> content
 export type ContentCommand =

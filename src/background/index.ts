@@ -6,8 +6,8 @@ import { b64 } from "../lib/crypto";
 import * as db from "../lib/db";
 import { detectCountry, detectPortal } from "../lib/detectors";
 import {
-  aiDraftAnswer, aiExtractJob, aiMatch, aiTailorResume, localDraftAnswer,
-  localMatch, localTailorResume, MatchProfile,
+  aiDraftAnswer, aiExtractJob, aiMapFields, aiMatch, aiTailorResume,
+  localDraftAnswer, localMatch, localTailorResume, MatchProfile,
 } from "../lib/matcher";
 import {
   BgRequest, ContentCommand, FillContext, SidePanelModel, normalizeQuestion,
@@ -1194,6 +1194,19 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
 
     case "isSidePanelOpen":
       return { ok: true, open: sidePanelPortCount > 0 };
+
+    case "aiMapFields": {
+      const cfg = await db.getAiConfig().catch(() => undefined);
+      if (!cfg?.enabled || !cfg.apiKey || !cfg.model) {
+        return { ok: false, error: "AI not configured." };
+      }
+      try {
+        const mapping = await aiMapFields(cfg, msg.fields, msg.profileKeys);
+        return { ok: true, mapping };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
 
     case "getSidePanelModel": {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

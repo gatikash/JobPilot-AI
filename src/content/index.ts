@@ -947,6 +947,12 @@ async function fillPage(applicationId: string, ctx: FillContext): Promise<void> 
   await fillWorkExperienceBlocks(ctx, report, preFilled);
 
   const inputs = collectInputs();
+
+  // Fields that fell through the rule-based matcher; collected here so the
+  // AI fallback can classify the whole batch in one call at the end instead
+  // of one round-trip per field.
+  const unmatched: { el: HTMLElement; signals: FieldSignals; question: string }[] = [];
+
   for (const el of inputs) {
     if (preFilled.has(el)) continue;
     const signals = collectSignals(el);
@@ -1016,12 +1022,17 @@ async function fillPage(applicationId: string, ctx: FillContext): Promise<void> 
       }
     }
 
-    // 4. unknown field -> missing when required or clearly a question
-    if (isRequired(el) || looksLikeQuestion(question)) {
+    // 4. rule matcher gave up on this field; queue it for the AI fallback
+    //    pass instead of pushing straight to missing.
+    if (isAiFillable(el)) {
+      unmatched.push({ el, signals, question });
+    } else if (isRequired(el) || looksLikeQuestion(question)) {
       report.missing.push(makeMissing(el, question || "Unlabeled field", signals));
       highlight(el, "missing");
     }
   }
+
+  await runAiFieldFallback(unmatched, ctx, report);
 
   await chrome.runtime.sendMessage({ type: "fillReport", applicationId, report }).catch(() => undefined);
   toast(
@@ -1029,6 +1040,86 @@ async function fillPage(applicationId: string, ctx: FillContext): Promise<void> 
       ? `Filled ${report.filled.length} field(s). ${report.missing.length} need your input - see the side panel.`
       : `Filled ${report.filled.length} field(s). Review the page, then click Next/Submit yourself.`,
   );
+}
+
+/** AI fallback is limited to plain text-ish inputs: filling a radio group,
+ * checkbox, or <select> from an LLM guess is too easy to mislabel. Those
+ * still fall through to the "missing" list where the user answers them. */
+function isAiFillable(el: HTMLElement): boolean {
+  if (el instanceof HTMLTextAreaElement) return true;
+  if (el instanceof HTMLInputElement) {
+    const t = (el.type || "text").toLowerCase();
+    return ["text", "email", "tel", "url", "number", "search"].includes(t);
+  }
+  return false;
+}
+
+/** Ask the configured AI to map any unmatched text-ish inputs to canonical
+ * profile keys, then fill whatever the model was confident about. Fields
+ * the model returns null for (or that fail the key lookup) fall back to
+ * the "missing" list so the side panel can prompt the user. */
+async function runAiFieldFallback(
+  unmatched: { el: HTMLElement; signals: FieldSignals; question: string }[],
+  ctx: FillContext,
+  report: FillReport,
+): Promise<void> {
+  if (unmatched.length === 0) return;
+
+  const profileEntries = Object.entries(ctx.profileValues)
+    .filter(([, v]) => (v ?? "").toString().trim().length > 0);
+  const profileKeys = profileEntries.map(([k]) => k);
+
+  if (profileKeys.length === 0) {
+    for (const { el, signals, question } of unmatched) {
+      if (isRequired(el) || looksLikeQuestion(question)) {
+        report.missing.push(makeMissing(el, question || "Unlabeled field", signals));
+        highlight(el, "missing");
+      }
+    }
+    return;
+  }
+
+  const fields = unmatched.map((u, idx) => ({
+    idx,
+    label: u.signals.label.slice(0, 240),
+    placeholder: u.signals.placeholder.slice(0, 120),
+    aria: u.signals.aria.slice(0, 240),
+    nearby: u.signals.nearby.slice(0, 240),
+    name: u.signals.name.slice(0, 120),
+  }));
+
+  let mapping: Record<number, string> = {};
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "aiMapFields",
+      fields,
+      profileKeys,
+    });
+    if (res?.ok && res.mapping) mapping = res.mapping as Record<number, string>;
+  } catch {
+    // fall through: any AI error means everything unmatched becomes missing
+  }
+
+  for (let idx = 0; idx < unmatched.length; idx += 1) {
+    const { el, signals, question } = unmatched[idx];
+    const key = mapping[idx];
+    const value = key ? (ctx.profileValues[key] ?? "") : "";
+    const fillable = el as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+    if (value && setFieldValue(fillable, value)) {
+      report.filled.push({
+        fieldId: register(el),
+        question: question || key || "AI-mapped field",
+        value,
+        confidence: "medium",
+      });
+      highlight(el, "review");
+      continue;
+    }
+    if (isRequired(el) || looksLikeQuestion(question)) {
+      report.missing.push(makeMissing(el, question || "Unlabeled field", signals));
+      highlight(el, "missing");
+    }
+  }
 }
 
 function register(el: HTMLElement): string {

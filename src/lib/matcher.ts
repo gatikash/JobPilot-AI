@@ -454,6 +454,64 @@ export function localTailorResume(
   };
 }
 
+export interface AiFieldInput {
+  idx: number;
+  label: string;
+  placeholder: string;
+  aria: string;
+  nearby: string;
+  name: string;
+}
+
+/** Ask the AI to map ambiguous form fields to canonical profile keys.
+ * Only used after the deterministic keyword matcher has failed. Model is
+ * instructed to answer null for anything legal / EEO / visa / salary /
+ * demographic so those never get autofilled from an AI guess. */
+export async function aiMapFields(
+  cfg: AiConfig, fields: AiFieldInput[], profileKeys: string[],
+): Promise<Record<number, string>> {
+  if (fields.length === 0 || profileKeys.length === 0) return {};
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content:
+        "You map job-application form fields to canonical profile keys. Return only valid JSON.",
+    },
+    {
+      role: "user",
+      content: [
+        "For each FIELD, pick the SINGLE best canonical key from AVAILABLE_KEYS,",
+        "or null when no key clearly matches the field.",
+        "Do not invent keys that are not in AVAILABLE_KEYS.",
+        "Return null for legal, visa, sponsorship, salary, EEO, gender, race,",
+        "disability, veteran, criminal, religion, or sexual orientation questions.",
+        "Return null for the resume upload input (a real file input).",
+        'Return JSON exactly like: {"mappings":[{"idx":0,"key":"email"},{"idx":1,"key":null}]}',
+        "",
+        "AVAILABLE_KEYS:",
+        profileKeys.join(", "),
+        "",
+        "FIELDS:",
+        JSON.stringify(fields).slice(0, 8000),
+      ].join("\n"),
+    },
+  ];
+  const data = parseJsonObject(await callModel(cfg, messages));
+  const out: Record<number, string> = {};
+  const arr = Array.isArray(data.mappings) ? data.mappings : [];
+  const allowed = new Set(profileKeys);
+  for (const m of arr) {
+    if (!m || typeof m !== "object") continue;
+    const rec = m as Record<string, unknown>;
+    const idx = rec.idx;
+    const key = rec.key;
+    if (typeof idx === "number" && typeof key === "string" && allowed.has(key)) {
+      out[idx] = key;
+    }
+  }
+  return out;
+}
+
 export async function aiTailorResume(
   cfg: AiConfig, jobUrl: string, jobText: string, profile: MatchProfile,
 ): Promise<ResumeTailoringResult> {
