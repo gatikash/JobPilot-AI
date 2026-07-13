@@ -22,6 +22,12 @@
     }
     .panel-footer button { min-width: 0; }
     #btn-analyze-profile { grid-column: 1 / -1; }
+    .footer-hint {
+      grid-column: 1 / -1;
+      font-size: 11px;
+      text-align: center;
+      margin: 2px 0 4px;
+    }
   </style>
 </head>
 <body class="sidepanel-page">
@@ -98,6 +104,7 @@
 
   <div class="panel-footer">
     <button id="btn-analyze-profile" title="Analyzes the current job against your profile/resumes without filling the form. Use when the page loaded but the match score did not appear.">Analyze profile</button>
+    <div class="muted footer-hint">Don't see anything? Refresh the page, then click <b>Analyze profile</b>.</div>
     <button id="btn-rerun" class="secondary" title="Scans the page you are on right now and fills every known field again. Use after logging in, moving to the next form step, or fixing your profile.">Scan &amp; fill</button>
     <button id="btn-submitted">Mark as Applied</button>
   </div>

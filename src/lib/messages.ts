@@ -85,6 +85,9 @@ export interface SidePanelModel {
   duplicateOf?: { company: string; jobTitle: string; createdAt: number };
   match?: MatchResult;
   matchPending?: boolean;
+  /** last error surfaced by the matcher (e.g. no resume, AI misconfigured) so
+   * the panel can render a specific message instead of a generic empty state */
+  matchError?: string;
   tailoring?: ResumeTailoringResult;
   tailoringPending?: boolean;
   lastDraft?: DraftAnswerResult;

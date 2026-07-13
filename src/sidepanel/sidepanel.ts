@@ -174,11 +174,15 @@ function renderMatch(m: SidePanelModel): void {
     profiles.innerHTML = "";
     missing.innerHTML = "";
     recommend.textContent = "";
-    status.innerHTML = m.matchPending
-      ? `<span class="tailor-spinner" aria-hidden="true" style="margin-right:6px;vertical-align:-2px;"></span>Analysing match score, please wait…`
-      : (m.aiConfigured
+    if (m.matchPending) {
+      status.innerHTML = `<span class="tailor-spinner" aria-hidden="true" style="margin-right:6px;vertical-align:-2px;"></span>Analysing match score, please wait…`;
+    } else if (m.matchError) {
+      status.textContent = m.matchError;
+    } else {
+      status.textContent = m.aiConfigured
         ? "Click Match to score this job against your resumes."
-        : "Tip: configure AI Matching in Settings for semantic scores. Without it you get a free keyword estimate.");
+        : "Tip: configure AI Matching in Settings for semantic scores. Without it you get a free keyword estimate.";
+    }
     renderTailoring(m);
     return;
   }
@@ -556,9 +560,16 @@ chrome.tabs.onActivated.addListener(() => void refresh());
 // Long-lived port so the background service worker can tell when the side
 // panel closes. When the panel is closed the port disconnects; the content
 // script uses that signal to stop autofilling on modal mutations.
-const keepAlivePort = chrome.runtime.connect({ name: "sidepanel" });
-// Keep the reference alive across the module lifetime; nothing to send.
-void keepAlivePort;
+// The port also dies whenever Chrome evicts the MV3 service worker, which
+// would leave the worker's open-panel counter at 0 while this panel is still
+// visible — so reconnect on disconnect for as long as the panel lives.
+function connectKeepAlivePort(): void {
+  const port = chrome.runtime.connect({ name: "sidepanel" });
+  port.onDisconnect.addListener(() => {
+    setTimeout(connectKeepAlivePort, 500);
+  });
+}
+connectKeepAlivePort();
 
 initStaticTips();
 void refresh();

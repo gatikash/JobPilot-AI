@@ -19,6 +19,10 @@ import {
 
 interface TabState {
   job?: JobInfo;
+  /** top-frame tab URL captured when `job` was stored. Stale checks must
+   * compare against this, not job.url: jobs scraped inside cross-origin ATS
+   * iframes carry the iframe's URL, which never equals the tab's URL. */
+  analyzedTabUrl?: string;
   applicationId?: string;
   /** fill reports per frameId; replaced (not appended) on every re-run */
   reports: Record<string, FillReport>;
@@ -38,10 +42,49 @@ interface TabState {
   likelyApplied?: LikelyAppliedSignal;
   /** tab navigated away from the analyzed job; fresh analysis not in yet */
   analyzing?: boolean;
+  /** wall-clock ms when `analyzing` was set. Used to detect a stuck flag
+   * left behind after a service-worker eviction (setTimeout failsafes do
+   * not survive SW restart). */
+  analyzingStartedAt?: number;
+  /** last error surfaced by runMatch (e.g. no resumes configured) so the
+   * side panel can render it instead of a generic hint. */
+  matchError?: string;
 }
+
+/** Max time we trust an `analyzing` flag before treating it as stuck. The
+ * failsafe setTimeout does not survive SW eviction; this guard rescues the
+ * UI whenever a re-trigger reads a state left over from a killed worker. */
+const ANALYZING_STALE_MS = 15_000;
 
 function emptyTabState(): TabState {
   return { reports: {}, dismissedQuestions: [] };
+}
+
+function markAnalyzing(state: TabState): void {
+  state.analyzing = true;
+  state.analyzingStartedAt = Date.now();
+}
+
+function clearAnalyzing(state: TabState): void {
+  state.analyzing = false;
+  state.analyzingStartedAt = undefined;
+}
+
+/** True only when `analyzing` was set recently. A stale-true flag (SW died
+ * mid-analysis) reports false so the caller can restart cleanly. */
+function isActivelyAnalyzing(state: TabState): boolean {
+  if (!state.analyzing) return false;
+  const started = state.analyzingStartedAt ?? 0;
+  if (!started) return false;
+  return Date.now() - started < ANALYZING_STALE_MS;
+}
+
+async function setMatchError(tabId: number, error: string | undefined): Promise<void> {
+  const state = await getTabState(tabId);
+  if (state.matchError === error) return;
+  state.matchError = error;
+  await setTabState(tabId, state);
+  notifyPanel();
 }
 
 function canDraftAnswer(question: string): boolean {
@@ -177,29 +220,39 @@ async function selectedMatchProfile(countryCode: string): Promise<MatchProfile |
 
 async function runMatch(tabId: number, force: boolean): Promise<unknown> {
   if (await db.getCryptoMeta()) {
-    return { ok: false, error: "One-time update needed: open the JobPilot AI popup to convert your data first." };
+    const error = "One-time update needed: open the JobPilot AI popup to convert your data first.";
+    await setMatchError(tabId, error);
+    return { ok: false, error };
   }
   const state = await getTabState(tabId);
   const job = state.job;
-  if (!job?.title || !job.description) {
-    return { ok: false, error: "No job description detected on this page yet." };
+  if (!job?.title) {
+    const error = "No job details detected on this page yet.";
+    await setMatchError(tabId, error);
+    return { ok: false, error };
   }
 
   if (!force) {
     const cached = await getCachedMatch(job.url);
-    if (cached) { notifyPanel(); return { ok: true, cached: true }; }
+    if (cached) { await setMatchError(tabId, undefined); notifyPanel(); return { ok: true, cached: true }; }
   }
 
   const profiles = await buildMatchProfiles(job.countryCode);
   if (profiles.length === 0) {
-    return { ok: false, error: "No resume text or skills found. Add resumes or fill your profile skills first." };
+    const error = "No resume text or profile skills found. Add a resume or fill your profile skills first.";
+    await setMatchError(tabId, error);
+    return { ok: false, error };
   }
 
-  const jobText = `${job.title}\n${job.company}\n${job.description}`;
+  // Allow matching on title-only jobs (LinkedIn detail-pane sometimes yields
+  // an empty description). Local matcher still gets enough tokens from the
+  // title + company to produce a keyword estimate.
+  const jobText = [job.title, job.company, job.description].filter(Boolean).join("\n");
 
   // instant local estimate first so the panel shows something immediately
   const local = localMatch(job.url, jobText, profiles);
   await setCachedMatch(local);
+  await setMatchError(tabId, undefined);
   notifyPanel();
 
   const cfg = await db.getAiConfig();
@@ -229,8 +282,8 @@ async function runTailoring(tabId: number, force: boolean): Promise<unknown> {
   }
   const state = await getTabState(tabId);
   const job = state.job;
-  if (!job?.title || !job.description) {
-    return { ok: false, error: "No job description detected on this page yet." };
+  if (!job?.title) {
+    return { ok: false, error: "No job details detected on this page yet." };
   }
 
   if (!force) {
@@ -242,7 +295,7 @@ async function runTailoring(tabId: number, force: boolean): Promise<unknown> {
   if (!profile) {
     return { ok: false, error: "No resume text or profile skills found. Add resume match text first." };
   }
-  const jobText = `${job.title}\n${job.company}\n${job.description}`;
+  const jobText = [job.title, job.company, job.description].filter(Boolean).join("\n");
 
   const local = localTailorResume(job.url, jobText, profile);
   await setCachedTailoring(local);
@@ -308,15 +361,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (newUrl) {
     void (async () => {
       const state = await getTabState(tabId);
-      if (!state.job || newUrl === state.job.url) return;
-      if (sameHost(newUrl, state.job.url)) {
+      if (!state.job) return;
+      const anchor = state.analyzedTabUrl || state.job.url;
+      if (newUrl === anchor || newUrl === state.job.url) return;
+      if (sameHost(newUrl, anchor)) {
         // SPA job switch or multi-step form: keep data, flag as stale until a
         // fresh analysis lands so the panel shows loading instead of old data.
-        state.analyzing = true;
+        markAnalyzing(state);
       } else {
         // different site: old job data is definitely wrong, blank the panel
         blankJobState(state);
-        state.analyzing = await canInject(newUrl);
+        if (await canInject(newUrl)) markAnalyzing(state);
       }
       if (state.analyzing) scheduleAnalyzingFailsafe(tabId);
       await setTabState(tabId, state);
@@ -350,11 +405,13 @@ function blankJobState(state: TabState): void {
   const keep = { pendingAssist: state.pendingAssist };
   Object.assign(state, emptyTabState(), keep);
   state.job = undefined;
+  state.analyzedTabUrl = undefined;
   state.applicationId = undefined;
   state.resumeName = undefined;
   state.duplicateOf = undefined;
   state.likelyApplied = undefined;
-  state.analyzing = false;
+  state.matchError = undefined;
+  clearAnalyzing(state);
 }
 
 /** True when the extension may inject into this URL (manifest portals or a
@@ -431,7 +488,7 @@ async function autoAnalyzeTab(tabId: number, url: string): Promise<void> {
   if (!(await canInject(url))) {
     const s = await getTabState(tabId);
     if (s.analyzing) {
-      s.analyzing = false;
+      clearAnalyzing(s);
       await setTabState(tabId, s);
       notifyPanel();
     }
@@ -439,8 +496,8 @@ async function autoAnalyzeTab(tabId: number, url: string): Promise<void> {
   }
 
   const state = await getTabState(tabId);
-  if (!state.analyzing) {
-    state.analyzing = true;
+  if (!isActivelyAnalyzing(state)) {
+    markAnalyzing(state);
     await setTabState(tabId, state);
     notifyPanel();
     scheduleAnalyzingFailsafe(tabId);
@@ -452,12 +509,15 @@ async function autoAnalyzeTab(tabId: number, url: string): Promise<void> {
     const job = analysis.job?.title ? analysis.job : await aiExtractJobFromPage(tabId, url);
     if (job?.title) {
       await upsertApplication(job, tabId); // clears analyzing
-      await runMatch(tabId, false); // respects the autoMatch setting + cache
+      // Auto-match errors are best-effort UX: surface them via state.matchError
+      // (already set by runMatch on failure) so the side panel can render the
+      // real reason instead of a generic hint.
+      await runMatch(tabId, false).catch(() => undefined);
     }
   } finally {
     const s = await getTabState(tabId);
     if (s.analyzing) {
-      s.analyzing = false;
+      clearAnalyzing(s);
       await setTabState(tabId, s);
     }
     notifyPanel();
@@ -465,13 +525,16 @@ async function autoAnalyzeTab(tabId: number, url: string): Promise<void> {
 }
 
 /** If no fresh analysis arrives shortly, drop the loading state so the panel
- * is not stuck on a spinner (non-job page or content script not present). */
-function scheduleAnalyzingFailsafe(tabId: number, ms = 5000): void {
+ * is not stuck on a spinner (non-job page or content script not present).
+ * Window must cover the worst honest path: injection + 3 scrape retries
+ * (~5s) + AI page extraction; anything that finishes sooner clears the flag
+ * itself, so the timeout only fires for genuinely dead analyses. */
+function scheduleAnalyzingFailsafe(tabId: number, ms = 12_000): void {
   setTimeout(() => {
     void (async () => {
       const s = await getTabState(tabId);
       if (s.analyzing) {
-        s.analyzing = false;
+        clearAnalyzing(s);
         await setTabState(tabId, s);
         notifyPanel();
       }
@@ -787,7 +850,9 @@ async function upsertApplication(job: JobInfo, tabId: number): Promise<TabState>
     state.likelyApplied = undefined;
   }
   state.job = job;
-  state.analyzing = false;
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  if (tab?.url) state.analyzedTabUrl = tab.url;
+  clearAnalyzing(state);
 
   if (await vaultReady()) {
     const existing = await db.listApplications();
@@ -995,7 +1060,7 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
       if (tabId === undefined) return { ok: false, error: "no tab" };
       const state = await getTabState(tabId);
       if (msg.jobChanged) blankJobState(state); // old job's data must not linger
-      state.analyzing = true;
+      markAnalyzing(state);
       await setTabState(tabId, state);
       // content polls up to ~9s for a stable scrape; keep loading a bit longer
       scheduleAnalyzingFailsafe(tabId, 11_000);
@@ -1008,7 +1073,7 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
       if (isEmptyJobSignal(msg.job)) {
         const prev = await getTabState(tabId);
         if (prev.analyzing) {
-          prev.analyzing = false; // page analyzed, nothing found; stop loading state
+          clearAnalyzing(prev); // page analyzed, nothing found; stop loading state
           await setTabState(tabId, prev);
           notifyPanel();
         }
@@ -1184,7 +1249,7 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
       // analysis is in flight.
       const state = await getTabState(tab.id);
       blankJobState(state);
-      state.analyzing = true;
+      markAnalyzing(state);
       await setTabState(tab.id, state);
       scheduleAnalyzingFailsafe(tab.id);
       notifyPanel();
@@ -1213,16 +1278,31 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
       const model: SidePanelModel = { unlocked: await vaultReady(), missing: [] };
       if (tab?.id !== undefined) {
         const state = await getTabState(tab.id);
+        // Stale checks compare against the tab URL recorded when the job was
+        // analyzed (analyzedTabUrl), NOT job.url: iframe-hosted ATS jobs carry
+        // the iframe's origin and would otherwise be wiped on every refresh.
+        const anchor = state.analyzedTabUrl || state.job?.url;
         // safety net: never serve job data left over from a different site
-        if (state.job && tab.url && /^https?:/.test(tab.url) && !sameHost(tab.url, state.job.url)) {
+        if (state.job && anchor && tab.url && /^https?:/.test(tab.url) && !sameHost(tab.url, anchor)) {
+          blankJobState(state);
+          await setTabState(tab.id, state);
+        }
+        // Same host but different URL (SPA job switch or user navigated to a
+        // new posting on the same portal): cached job is stale for this tab.
+        // Blank it so the panel doesn't render the previous posting while a
+        // fresh analysis is kicked off below.
+        if (state.job && anchor && tab.url && /^https?:/.test(tab.url) &&
+            sameHost(tab.url, anchor) && anchor !== tab.url) {
           blankJobState(state);
           await setTabState(tab.id, state);
         }
         // rescue path: tab was already loaded before the extension started
         // (or service worker restarted), so tabs.onUpdated never fired.
         // Kick off analysis now — sidepanel will show the spinner meanwhile.
-        if (!state.job?.title && !state.analyzing && tab.url && /^https?:/.test(tab.url)) {
-          state.analyzing = true;
+        // `isActivelyAnalyzing` gates on wall-clock recency so a stuck flag
+        // left by a killed SW does not block the restart.
+        if (!state.job?.title && !isActivelyAnalyzing(state) && tab.url && /^https?:/.test(tab.url)) {
+          markAnalyzing(state);
           await setTabState(tab.id, state);
           scheduleAnalyzingFailsafe(tab.id);
           void autoAnalyzeTab(tab.id, tab.url);
@@ -1234,12 +1314,21 @@ async function handle(msg: BgRequest, sender: chrome.runtime.MessageSender): Pro
         model.duplicateOf = state.duplicateOf;
         model.matchPending = state.matchPending;
         model.tailoringPending = state.tailoringPending;
-        model.analyzing = state.analyzing;
+        model.analyzing = isActivelyAnalyzing(state);
+        model.matchError = state.matchError;
         model.lastDraft = state.lastDraft;
         model.likelyApplied = state.likelyApplied;
         if (state.job?.url) {
           model.match = await getCachedMatch(state.job.url);
           model.tailoring = await getCachedTailoring(state.job.url);
+          // Job known but never scored (SW died before runMatch, or the match
+          // cache was lost): kick a match now so opening the panel always
+          // yields a score. runMatch caches a local result immediately, so
+          // this cannot loop, and a matchError also stops re-kicks.
+          if (!model.match && state.job.title && !state.matchPending && !state.matchError) {
+            model.matchPending = true;
+            void runMatch(tab.id, false);
+          }
         }
         if (model.unlocked) {
           if (state.applicationId) {
@@ -1304,8 +1393,8 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
     const tab = await chrome.tabs.get(tabId).catch(() => undefined);
     if (!tab?.url || !/^https?:/.test(tab.url)) return;
     const state = await getTabState(tabId);
-    if (state.job?.title || state.analyzing) return;
-    state.analyzing = true;
+    if (state.job?.title || isActivelyAnalyzing(state)) return;
+    markAnalyzing(state);
     await setTabState(tabId, state);
     scheduleAnalyzingFailsafe(tabId);
     void autoAnalyzeTab(tabId, tab.url);
@@ -1316,8 +1405,8 @@ async function kickAnalyzeActiveTab(): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => [undefined] as const);
   if (!tab?.id || !tab.url || !/^https?:/.test(tab.url)) return;
   const state = await getTabState(tab.id);
-  if (state.job?.title || state.analyzing) return;
-  state.analyzing = true;
+  if (state.job?.title || isActivelyAnalyzing(state)) return;
+  markAnalyzing(state);
   await setTabState(tab.id, state);
   scheduleAnalyzingFailsafe(tab.id);
   void autoAnalyzeTab(tab.id, tab.url);
