@@ -38,12 +38,15 @@ const RULES: Rule[] = [
   { key: "lastName", exact: ["last name", "surname", "family name", "nachname"], groups: [["last", "name"], ["family", "name"]], autocomplete: ["family-name"] },
   { key: "fullName", exact: ["full name", "name", "your name", "complete name"], groups: [["full", "name"]], autocomplete: ["name"] },
   { key: "email", exact: ["email", "email address", "e mail", "e mail address", "work email"], groups: [["email"]], autocomplete: ["email"] },
+  { key: "alternateEmail", exact: ["alternate email", "alternative email", "secondary email", "other email"], groups: [["alternate", "email"], ["alternative", "email"], ["secondary", "email"]] },
   { key: "phone", exact: ["phone", "phone number", "mobile", "mobile number", "telephone", "contact number", "cell phone"], groups: [["phone"], ["mobile"]], autocomplete: ["tel", "tel-national"] },
-  { key: "address", exact: ["address", "street address", "address line 1", "current address"], groups: [["street", "address"]], autocomplete: ["street-address", "address-line1"] },
+  { key: "whatsapp", exact: ["whatsapp", "whatsapp number", "whats app", "whats app number"], groups: [["whatsapp"], ["whats", "app"]] },
+  { key: "address", exact: ["address", "street address", "address 1", "address line 1", "address line one", "street address line 1", "current address"], groups: [["street", "address"]], autocomplete: ["street-address", "address-line1"] },
   { key: "city", exact: ["city", "town", "current city"], groups: [["city"]], autocomplete: ["address-level2"] },
   { key: "state", exact: ["state", "province", "region", "state province"], groups: [["state"], ["province"]], autocomplete: ["address-level1"] },
   { key: "postalCode", exact: ["postal code", "zip", "zip code", "zip postal code", "pincode", "pin code", "postcode"], groups: [["postal"], ["zip"]], autocomplete: ["postal-code"] },
-  { key: "country", exact: ["country", "country region", "country of residence", "current location country"], groups: [["country"]], autocomplete: ["country", "country-name"] },
+  { key: "currentResidenceCountry", exact: ["country of residence", "current residence country", "residence country", "current location country"], groups: [["residence", "country"], ["current", "country"]] },
+  { key: "country", exact: ["country", "country region"], groups: [["country"]], autocomplete: ["country", "country-name"] },
   { key: "nationality", exact: ["nationality", "citizenship"], groups: [["nationality"], ["citizenship"]] },
   { key: "dateOfBirth", exact: ["date of birth", "birth date", "dob"], groups: [["birth", "date"]], autocomplete: ["bday"], sensitive: true },
   { key: "gender", exact: ["gender", "sex"], groups: [], sensitive: true },
@@ -56,12 +59,15 @@ const RULES: Rule[] = [
   { key: "totalExperience", exact: ["total experience", "years of experience", "experience in years", "total years of experience", "work experience years"], groups: [["years", "experience"]] },
   { key: "relevantExperience", exact: ["relevant experience", "relevant years of experience"], groups: [["relevant", "experience"]] },
   { key: "primarySkills", exact: ["skills", "primary skills", "key skills", "technical skills"], groups: [["skills"]] },
+  { key: "secondarySkills", exact: ["secondary skills", "additional skills", "other skills"], groups: [["secondary", "skills"], ["additional", "skills"]] },
   { key: "highestDegree", exact: ["highest degree", "highest education", "education level", "highest qualification"], groups: [["highest", "degree"], ["highest", "education"]] },
+  { key: "degreeName", exact: ["degree name", "degree", "qualification name"], groups: [["degree", "name"], ["qualification", "name"]] },
   { key: "university", exact: ["university", "school", "college", "institution", "school name"], groups: [["university"], ["college"]] },
   { key: "fieldOfStudy", exact: ["field of study", "major", "discipline", "specialization"], groups: [["field", "study"], ["major"]] },
   { key: "graduationYear", exact: ["graduation year", "year of graduation", "end year"], groups: [["graduation", "year"]] },
   { key: "gpa", exact: ["gpa", "grade point average", "percentage", "cgpa"], groups: [["gpa"], ["cgpa"]] },
   { key: "coverLetterText", exact: ["cover letter", "covering letter", "why do you want to work here", "message to hiring team"], groups: [["cover", "letter"]] },
+  { key: "otherProfileUrl", exact: ["other profile url", "additional profile url", "other professional profile"], groups: [["other", "profile"], ["additional", "profile"]] },
   // country-profile driven (sensitive category: never medium-confidence fill)
   { key: "noticePeriod", exact: ["notice period", "notice period in days", "current notice period", "when can you start", "earliest start date", "availability to start"], groups: [["notice", "period"]], sensitive: true },
   { key: "expectedSalary", exact: ["expected salary", "salary expectation", "salary expectations", "expected ctc", "expected compensation", "desired salary", "expected annual salary", "salary requirements"], groups: [["expected", "salary"], ["desired", "salary"], ["salary", "expectation"], ["expected", "ctc"]], sensitive: true },
@@ -84,6 +90,9 @@ const RULES: Rule[] = [
     ], groups: [["require", "sponsorship"], ["need", "sponsorship"], ["visa", "sponsorship"]], sensitive: true },
   { key: "willingToRelocate", exact: ["are you willing to relocate", "willing to relocate", "open to relocation"], groups: [["willing", "relocate"], ["open", "relocation"]], sensitive: true },
   { key: "visaType", exact: ["visa type", "current visa status", "visa status", "immigration status"], groups: [["visa", "status"]], sensitive: true },
+  { key: "workPermitType", exact: ["work permit type", "work permit", "permit type"], groups: [["work", "permit"]], sensitive: true },
+  { key: "preferredCities", exact: ["preferred cities", "preferred locations", "location preferences"], groups: [["preferred", "cities"], ["preferred", "locations"]] },
+  { key: "remotePreference", exact: ["remote preference", "do you prefer remote work", "open to remote work"], groups: [["remote", "preference"]] },
 ];
 
 // Fields whose questions are legal/EEO territory - never auto-answer at all
@@ -103,6 +112,43 @@ export function normalize(s: string): string {
     .trim();
 }
 
+/** Normalize identifiers such as addressLine2 and address_line_3 into the
+ * same word stream as their visible labels. */
+function normalizedDirectSignals(signals: FieldSignals): string {
+  const raw = [
+    signals.label,
+    signals.placeholder,
+    signals.name,
+    signals.id,
+    signals.aria,
+    signals.autocomplete,
+  ].join(" ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([a-zA-Z])(\d)/g, "$1 $2")
+    .replace(/(\d)([a-zA-Z])/g, "$1 $2")
+    .replace(/[_\-.[\]]/g, " ");
+  return normalize(raw);
+}
+
+/** Address lines are separate profile slots. The profile currently stores
+ * only line 1 (`address`), so line 2/3 must never borrow that value. */
+export function isSecondaryAddressField(signals: FieldSignals): boolean {
+  const text = normalizedDirectSignals(signals);
+  const secondary = "(?:[2-9]|[1-9]\\d+|two|three|four|five|six|seven|eight|nine)";
+  return new RegExp(`\\b(?:address|street)(?: line)? ${secondary}\\b`).test(text)
+    || new RegExp(`\\b(?:line )?${secondary} (?:address|street)\\b`).test(text)
+    || ["address-line2", "address-line3"].includes(signals.autocomplete.toLowerCase().trim());
+}
+
+/** Final local gate for AI-proposed mappings. The model may help classify an
+ * ambiguous field, but it cannot override explicit slot semantics. */
+export function isProfileMappingCompatible(signals: FieldSignals, key: string): boolean {
+  if (key === "address" && isSecondaryAddressField(signals)) return false;
+
+  const deterministic = matchField(signals);
+  return !deterministic || deterministic.key === key;
+}
+
 /** Whole-word phrase containment: "city" is not inside "electricity". */
 function containsPhrase(haystack: string, phrase: string): boolean {
   if (!haystack || !phrase) return false;
@@ -118,29 +164,44 @@ export function matchField(signals: FieldSignals): MatchResult | null {
   const label = normalize(signals.label);
   const aria = normalize(signals.aria);
   const placeholder = normalize(signals.placeholder);
-  const nameId = normalize(`${signals.name} ${signals.id}`.replace(/[_\-.[\]]/g, " "));
+  const nameId = normalize(`${signals.name} ${signals.id}`
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([a-zA-Z])(\d)/g, "$1 $2")
+    .replace(/(\d)([a-zA-Z])/g, "$1 $2")
+    .replace(/[_\-.[\]]/g, " "));
   const combined = normalize(
     `${signals.label} ${signals.placeholder} ${signals.name} ${signals.id} ${signals.aria} ${signals.nearby}`
       .replace(/[_\-.[\]]/g, " "));
 
   if (isEeoQuestion(combined)) return null;
+  if (isSecondaryAddressField(signals)) return null;
 
   const ac = signals.autocomplete.toLowerCase().trim();
 
-  let best: MatchResult | null = null;
+  // Prefer specific visible semantics over generic autocomplete hints. This
+  // matters for controls such as "Alternate email" with autocomplete=email
+  // and "WhatsApp number" with autocomplete=tel.
+  for (const rule of RULES) {
+    // high: exact label/aria/placeholder match
+    if (rule.exact.some((e) => label === e || aria === e || placeholder === e)) {
+      return { key: rule.key, confidence: "high", sensitive: !!rule.sensitive };
+    }
+  }
+  for (const rule of RULES) {
+    // high: exact phrase appears in name/id (portals often use e.g. first_name)
+    if (rule.exact.some((e) => e.split(" ").length > 1 && containsPhrase(nameId, e))) {
+      return { key: rule.key, confidence: "high", sensitive: !!rule.sensitive };
+    }
+  }
   for (const rule of RULES) {
     // high: autocomplete token
     if (ac && rule.autocomplete?.includes(ac)) {
       return { key: rule.key, confidence: "high", sensitive: !!rule.sensitive };
     }
-    // high: exact label/aria/placeholder match
-    if (rule.exact.some((e) => label === e || aria === e || placeholder === e)) {
-      return { key: rule.key, confidence: "high", sensitive: !!rule.sensitive };
-    }
-    // high: exact phrase appears in name/id (portals often use e.g. first_name)
-    if (rule.exact.some((e) => e.split(" ").length > 1 && containsPhrase(nameId, e))) {
-      return { key: rule.key, confidence: "high", sensitive: !!rule.sensitive };
-    }
+  }
+
+  let best: MatchResult | null = null;
+  for (const rule of RULES) {
     // medium: label contains an exact phrase as whole words
     // ("Your first name" matches; "electricity" must NOT match "city")
     if (!best && rule.exact.some((e) => containsPhrase(label, e) || containsPhrase(aria, e))) {

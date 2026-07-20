@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
+    "test": "node scripts/test-field-matcher.mjs",
     "typecheck": "tsc --noEmit",
     "icons": "node scripts/make-icons.mjs"
   },

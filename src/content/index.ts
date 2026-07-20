@@ -4,7 +4,8 @@
 
 import { detectCountry, detectPortal } from "../lib/detectors";
 import {
-  FieldSignals, isEeoQuestion, isResumeUpload, matchField, pickOption, valueFits,
+  FieldSignals, isEeoQuestion, isProfileMappingCompatible, isResumeUpload,
+  isSecondaryAddressField, matchField, pickOption, valueFits,
 } from "../lib/fieldMatcher";
 import { ContentCommand, FillContext, normalizeQuestion } from "../lib/messages";
 import { FillReport, JobInfo, MissingField, WorkExperienceEntry } from "../lib/types";
@@ -998,7 +999,7 @@ async function fillPage(applicationId: string, ctx: FillContext): Promise<void> 
     // 3. rule-based match against profile values
     const match = matchField(signals);
     if (match) {
-      const value = ctx.profileValues[match.key] ?? "";
+      const value = (ctx.profileValues[match.key] ?? "").trim();
       // medium-confidence fills only on short, plain labels - long or
       // question-style labels ("How many years...?") are too easy to misread,
       // so those go to the user instead of risking nonsense data
@@ -1015,11 +1016,27 @@ async function fillPage(applicationId: string, ctx: FillContext): Promise<void> 
         highlight(el, match.confidence === "high" ? "filled" : "review");
         continue;
       }
-      if (match.sensitive && value === "" && isRequired(el)) {
+
+      // The field is already classified. If that exact profile slot is blank
+      // (or its saved value cannot be applied to this control), do not let AI
+      // substitute a different populated slot. Ask only when user input is
+      // actually needed.
+      if (isRequired(el) || looksLikeQuestion(question)) {
         report.missing.push(makeMissing(el, question || match.key, signals));
         highlight(el, "missing");
-        continue;
       }
+      continue;
+    }
+
+    // The profile has one street-address slot: Address Line 1. Explicit Line
+    // 2/3 controls are distinct values and may never receive Line 1 through
+    // the AI fallback.
+    if (isSecondaryAddressField(signals)) {
+      if (isRequired(el)) {
+        report.missing.push(makeMissing(el, question || "Additional address line", signals));
+        highlight(el, "missing");
+      }
+      continue;
     }
 
     // 4. rule matcher gave up on this field; queue it for the AI fallback
@@ -1047,6 +1064,7 @@ async function fillPage(applicationId: string, ctx: FillContext): Promise<void> 
  * still fall through to the "missing" list where the user answers them. */
 function isAiFillable(el: HTMLElement): boolean {
   if (el instanceof HTMLTextAreaElement) return true;
+  if (el instanceof HTMLSelectElement) return true;
   if (el instanceof HTMLInputElement) {
     const t = (el.type || "text").toLowerCase();
     return ["text", "email", "tel", "url", "number", "search"].includes(t);
@@ -1086,6 +1104,18 @@ async function runAiFieldFallback(
     aria: u.signals.aria.slice(0, 240),
     nearby: u.signals.nearby.slice(0, 240),
     name: u.signals.name.slice(0, 120),
+    inputType: u.el instanceof HTMLSelectElement
+      ? "select"
+      : u.el instanceof HTMLTextAreaElement
+        ? "textarea"
+        : (u.el as HTMLInputElement).type || "text",
+    required: isRequired(u.el),
+    options: u.el instanceof HTMLSelectElement
+      ? [...u.el.options]
+          .map((o) => o.text.trim())
+          .filter((text) => text && !/^select|^choose|^--/i.test(text))
+          .slice(0, 80)
+      : [],
   }));
 
   let mapping: Record<number, string> = {};
@@ -1103,12 +1133,13 @@ async function runAiFieldFallback(
   for (let idx = 0; idx < unmatched.length; idx += 1) {
     const { el, signals, question } = unmatched[idx];
     const key = mapping[idx];
-    const value = key ? (ctx.profileValues[key] ?? "") : "";
+    const compatibleKey = key && isProfileMappingCompatible(signals, key) ? key : "";
+    const value = compatibleKey ? (ctx.profileValues[compatibleKey] ?? "").trim() : "";
     const fillable = el as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
     if (value && setFieldValue(fillable, value)) {
       report.filled.push({
         fieldId: register(el),
-        question: question || key || "AI-mapped field",
+        question: question || compatibleKey || "AI-mapped field",
         value,
         confidence: "medium",
       });

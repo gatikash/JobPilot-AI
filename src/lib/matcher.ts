@@ -665,6 +665,9 @@ export interface AiFieldInput {
   aria: string;
   nearby: string;
   name: string;
+  inputType: string;
+  required: boolean;
+  options: string[];
 }
 
 /** Ask the AI to map ambiguous form fields to canonical profile keys.
@@ -686,6 +689,13 @@ export async function aiMapFields(
       content: [
         "For each FIELD, pick the SINGLE best canonical key from AVAILABLE_KEYS,",
         "or null when no key clearly matches the field.",
+        "A mapping must be a direct semantic match between the field and the key.",
+        "Never use a populated primary value as a substitute for a distinct blank slot.",
+        "For example: alternate email is not email, middle name is not first name,",
+        "and Address Line 2 or 3 is not Address Line 1 / address.",
+        "Map address only to an unnumbered street-address field or Address Line 1.",
+        "Use inputType, required, and options as context; required does not lower",
+        "the confidence threshold. Return null rather than making a best-effort guess.",
         "Do not invent keys that are not in AVAILABLE_KEYS.",
         "Return null for legal, visa, sponsorship, salary, EEO, gender, race,",
         "disability, veteran, criminal, religion, or sexual orientation questions.",

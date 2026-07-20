@@ -46,6 +46,11 @@ The extension is designed around one rule: **it assists, but it does not submit 
 - Scans the current job page from the popup or side panel.
 - Detects job title, company, location, country, portal, URL, and job description.
 - Fills known form fields from your saved profile and country-specific answers.
+- Matches each form control to its exact saved profile slot; blank or distinct
+  secondary fields (for example Address Line 2/3) are never filled by copying
+  Address Line 1 or another primary value.
+- Uses configured AI only for genuinely ambiguous fields, with control type,
+  required state, and available choices supplied as matching context.
 - Attaches the selected resume when the portal allows programmatic upload.
 - Highlights fields after filling:
   - Green: filled with high confidence.

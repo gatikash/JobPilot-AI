@@ -61,6 +61,9 @@ export interface AiMapFieldInput {
   aria: string;
   nearby: string;
   name: string;
+  inputType: string;
+  required: boolean;
+  options: string[];
 }
 
 // background -> content
